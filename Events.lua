@@ -37,6 +37,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
     if ui and ui.frame then
       if ui.debugToggle then ui.debugToggle:SetChecked(TM.debugEnabled) end
       if ui.stateToggle then ui.stateToggle:SetChecked(TM.db.showStateDisplay ~= false) end
+      if ui.questToggle then ui.questToggle:SetChecked(TM.db.autoAcceptQuest ~= false) end
       TM.RefreshTeamList()
       if not TM.selectedTeam then
         local saved = TM.LoadSelectedTeamForCharacter()
@@ -80,6 +81,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
     local ui = TM.ui
     if ui.debugToggle then ui.debugToggle:SetChecked(TM.debugEnabled) end
     if ui.stateToggle then ui.stateToggle:SetChecked(TM.db.showStateDisplay ~= false) end
+    if ui.questToggle then ui.questToggle:SetChecked(TM.db.autoAcceptQuest ~= false) end
     TM.RefreshTeamList()
     -- Consume pending selection or restore from charDb
     local key = TM.GetCharacterKey()
@@ -180,5 +182,21 @@ targetFrame:SetScript("OnEvent", function(self, event)
   if currentTarget ~= currentState.assist then
     TM.BroadcastMemberState("assist", nil)
     TM.DebugPrint("PLAYER_TARGET_CHANGED: assist effacé (nouvelle cible:", currentTarget, ")")
+  end
+end)
+
+-- Auto-accepter les quêtes si le leader accepte (si option activée)
+local questAutoFrame = CreateFrame("Frame")
+questAutoFrame:RegisterEvent("QUEST_ACCEPTED")
+questAutoFrame:SetScript("OnEvent", function(self, event, questID)
+  if not (TM.db and TM.db.autoAcceptQuest ~= false) then return end
+  local teamName = TM.selectedTeam
+  if not teamName then return end
+  local t = TM.db.teams and TM.db.teams[teamName]
+  if not t or not t.leader then return end
+  local leaderShort = t.leader:match("^(.-)%-") or t.leader
+  if leaderShort ~= UnitName("player") then return end
+  if TM.BroadcastQuestAccept then
+    TM.BroadcastQuestAccept(questID or 0)
   end
 end)

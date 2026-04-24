@@ -84,6 +84,18 @@ function TM.BroadcastMemberState(stateType, target)
   TM.DebugPrint("BroadcastMemberState:", stateType, "->", tostring(target))
 end
 
+-- Broadcast quest accept to group members (leader → members)
+-- questID: the WoW questID that was accepted
+function TM.BroadcastQuestAccept(questID)
+  if not IsInGroup() then return end
+  local payload = "QACCEPT|" .. (questID or 0)
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastQuestAccept questID=", questID)
+end
+
 -- Trigger XP broadcast on relevant events
 local xpSyncFrame = CreateFrame("Frame")
 xpSyncFrame:RegisterEvent("PLAYER_XP_UPDATE")
@@ -166,6 +178,17 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
       end
       if ui.frame and ui.frame:IsShown() and TM.selectedTeam then
         TM.SelectTeam(TM.selectedTeam, false)
+      end
+    end
+    return
+  end
+
+  -- Quest auto-accept: QACCEPT|questID
+  if mtype == "QACCEPT" then
+    if TM.db and TM.db.autoAcceptQuest ~= false then
+      if QuestFrame and QuestFrame:IsShown() then
+        AcceptQuest()
+        TM.DebugPrint("Auto-accept qu\195\170te depuis leader")
       end
     end
     return

@@ -5,6 +5,8 @@ Dédié et concu pour le multiboxing.
 
 Remerciement : Moorea, EbonyFaye
 
+Addon codé IA (multiples). 
+
 ---
 
 ## Structure des fichiers
@@ -91,6 +93,7 @@ Une infobulle rappelle ces raccourcis au survol de chaque ligne.
 | **Debug** (checkbox) | Active/désactive le mode debug (persistant) |
 | **Préfixe sync** (EditBox) | Préfixe des messages addon (défaut : `TM_SYNC`). Valider avec **Entrée** applique le préfixe et force un `ReloadUI`. **Échap** annule. Tous les membres du groupe doivent utiliser le même préfixe. |
 | **Affichage état follow/assist** (checkbox) | Affiche à gauche du nom de chaque membre (dans la liste flottante) la cible suivie/assistée, avec code couleur : **jaune** = follow uniquement · **vert** = assist uniquement ou follow+assist sur cibles différentes · **rouge** = follow et assist sur la même cible. Activé par défaut. |
+| **Accepter les quêtes auto** (checkbox) | Si le leader accepte une quête, les membres de la team qui ont la fenêtre de quête ouverte (même PNJ ciblé) acceptent automatiquement. Activé par défaut. |
 
 ---
 

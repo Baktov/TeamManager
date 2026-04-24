@@ -466,6 +466,28 @@ function TM.BuildUI()
   stateToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
   ui.stateToggle = stateToggle
 
+  -- Option : accepter les quêtes automatiquement
+  local questLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  questLabel:SetPoint("TOPLEFT", stateLabel, "BOTTOMLEFT", 0, -24)
+  questLabel:SetText("Accepter les qu\195\170tes auto")
+
+  local questToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  questToggle:SetPoint("LEFT", questLabel, "RIGHT", 6, 0)
+  questToggle:SetSize(24, 24)
+  questToggle:SetScript("OnClick", function(self)
+    TM.db.autoAcceptQuest = self:GetChecked()
+  end)
+  questToggle:SetChecked(TM.db.autoAcceptQuest ~= false)
+  questToggle:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("Accepter les qu\195\170tes automatiquement")
+    GameTooltip:AddLine("Si le leader accepte une qu\195\170te, les membres qui ont", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("le m\195\170me PNJ cibl\195\169 acceptent automatiquement.", 0.8, 0.8, 0.8)
+    GameTooltip:Show()
+  end)
+  questToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  ui.questToggle = questToggle
+
   -- Member input row
   local inputWidth = math.max(140, rightWidth - 220)
   ui.memberInput = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
