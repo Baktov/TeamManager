@@ -299,23 +299,53 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
   if mtype == "INSTENTER" then
     if TM.db and TM.db.autoEnterInstance ~= false then
       local kind = msg:match("^INSTENTER|(.+)$") or "lfg"
-      if kind == "portal" then
-        -- Portail monde : popup StaticPopup de type CONFIRM_ENTER_INSTANCE
-        if ConfirmEnterInstance then
-          for i = 1, 10 do
-            local popup = _G["StaticPopup" .. i]
-            if popup and popup:IsShown() and popup.which == "CONFIRM_ENTER_INSTANCE" then
-              ConfirmEnterInstance()
-              TM.DebugPrint("Auto-enter portail donjon depuis leader")
+
+      if kind == "lfg" then
+        -- Proposition LFG — activer le flag pending ET essai immédiat
+        TM.pendingInstanceAccept = true
+        C_Timer.After(15, function() TM.pendingInstanceAccept = false end)
+        for _, fname in ipairs({"LFGDungeonReadyPopup", "LFGDungeonReadyDialog", "LFGProposalFrame"}) do
+          local fr = _G[fname]
+          if fr and fr:IsShown() then
+            pcall(AcceptProposal)
+            TM.pendingInstanceAccept = false
+            TM.DebugPrint("Auto-accept LFG via", fname)
+            break
+          end
+        end
+
+      elseif kind == "portal" then
+        -- Portail monde : chercher n'importe quelle popup d'entrée d'instance
+        local confirmed = false
+        for i = 1, 10 do
+          local popup = _G["StaticPopup" .. i]
+          if popup and popup:IsShown() then
+            local w = popup.which or ""
+            if w:find("INSTANCE") or w:find("ENTER") or w:find("LOCK") then
+              pcall(ConfirmEnterInstance)
+              confirmed = true
+              TM.DebugPrint("Auto-enter portail depuis leader (popup", w, ")")
               break
             end
           end
         end
-      else
-        -- LFG : proposition de donjon prête
-        if LFGDungeonReadyDialog and LFGDungeonReadyDialog:IsShown() then
-          AcceptProposal()
-          TM.DebugPrint("Auto-accept proposition LFG depuis leader")
+        -- Fallback direct si aucun popup reconnu
+        if not confirmed then pcall(ConfirmEnterInstance) end
+
+      elseif kind == "delve" then
+        -- Gouffre (Delve, TWW) : activer le flag pending + essai immédiat
+        TM.pendingInstanceAccept = true
+        C_Timer.After(30, function() TM.pendingInstanceAccept = false end)
+        TM.DebugPrint("pendingInstanceAccept=true (delve)")
+        -- Essai immédiat si un dialog LFG est déjà ouvert
+        for _, fname in ipairs({"LFGDungeonReadyPopup", "LFGDungeonReadyDialog", "LFGProposalFrame"}) do
+          local fr = _G[fname]
+          if fr and fr:IsShown() then
+            pcall(AcceptProposal)
+            TM.pendingInstanceAccept = false
+            TM.DebugPrint("Auto-accept Delve immédiat via", fname)
+            break
+          end
         end
       end
     end

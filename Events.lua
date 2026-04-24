@@ -282,6 +282,7 @@ end)
 -- Entrée d'instance automatique : broadcaster quand le leader valide
 -- Cas 1 : proposition LFG (popup donjon prêt) — AcceptProposal
 hooksecurefunc("AcceptProposal", function()
+  TM.DebugPrint("AcceptProposal déclenché (leader=", tostring(_isLeader()), ")")
   if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
   if not _isLeader() then return end
   if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("lfg") end
@@ -295,3 +296,71 @@ if ConfirmEnterInstance then
     if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("portal") end
   end)
 end
+
+-- Cas 3 : Gouffres (Delves, TWW) + popups classiques
+-- Les Delves TWW n'utilisent PAS de StaticPopup Lua — on détecte l'entrée
+-- via PLAYER_ENTERING_WORLD côté leader, et LFG_PROPOSAL_SHOW côté membre.
+
+-- DEBUG : log tous les StaticPopup_Show pour identification future
+hooksecurefunc("StaticPopup_Show", function(which)
+  if TM.debugEnabled then TM.DebugPrint("StaticPopup_Show:", which) end
+end)
+
+-- Fallback StaticPopup_OnClick (portails / popups classiques)
+hooksecurefunc("StaticPopup_OnClick", function(self, whichButton)
+  if whichButton ~= 1 then return end
+  if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
+  if not _isLeader() then return end
+  local which = self.which or ""
+  TM.DebugPrint("StaticPopup_OnClick which=", which)
+  if which:find("DELVE") then
+    if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("delve") end
+  elseif which:find("INSTANCE") or which:find("LOCK") then
+    if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("portal") end
+  end
+end)
+
+-- Détection principale pour Delves TWW :
+-- quand le leader entre dans une instance (PLAYER_ENTERING_WORLD), broadcaster.
+local _lastBroadcastInstance = 0
+local delveDetectFrame = CreateFrame("Frame")
+delveDetectFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+delveDetectFrame:SetScript("OnEvent", function()
+  -- Toujours logger pour diagnostic (même si les checks échouent)
+  TM.DebugPrint("PLAYER_ENTERING_WORLD déclenché (autoEnterInstance=",
+    tostring(TM.db and TM.db.autoEnterInstance ~= false),
+    ", isLeader=", tostring(_isLeader()), ")")
+  if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
+  if not _isLeader() then return end
+  C_Timer.After(0.3, function()
+    local inInstance, instanceType = IsInInstance()
+    TM.DebugPrint("PLAYER_ENTERING_WORLD +0.3s: inInstance=", tostring(inInstance), "type=", tostring(instanceType))
+    if not inInstance then return end
+    local now = GetTime()
+    if (now - _lastBroadcastInstance) < 10 then
+      TM.DebugPrint("PLAYER_ENTERING_WORLD: anti-spam actif, skip broadcast")
+      return
+    end
+    _lastBroadcastInstance = now
+    TM.DebugPrint("PLAYER_ENTERING_WORLD: leader entré instance type=", instanceType, "-> broadcast delve")
+    if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("delve") end
+  end)
+end)
+
+-- Côté membre : auto-accepter LFG_PROPOSAL_SHOW directement si autoEnterInstance activé.
+-- Ne dépend PAS du flag pending — un membre en équipe accepte tout proposal d'instance.
+TM.pendingInstanceAccept = false
+local lfgAutoAcceptFrame = CreateFrame("Frame")
+lfgAutoAcceptFrame:RegisterEvent("LFG_PROPOSAL_SHOW")
+lfgAutoAcceptFrame:SetScript("OnEvent", function()
+  if not (TM.db and TM.db.autoEnterInstance ~= false) then
+    TM.DebugPrint("LFG_PROPOSAL_SHOW: autoEnterInstance désactivé, skip")
+    return
+  end
+  if _isLeader() then
+    TM.DebugPrint("LFG_PROPOSAL_SHOW: je suis leader, pas d'auto-accept membre")
+    return
+  end
+  TM.DebugPrint("LFG_PROPOSAL_SHOW: membre -> auto-accept proposal")
+  pcall(AcceptProposal)
+end)
