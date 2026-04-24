@@ -488,6 +488,29 @@ function TM.BuildUI()
   questToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
   ui.questToggle = questToggle
 
+  -- Option : sélection de dialogue PNJ automatique
+  local gossipLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  gossipLabel:SetPoint("TOPLEFT", questLabel, "BOTTOMLEFT", 0, -24)
+  gossipLabel:SetText("S\195\169lection dialogue PNJ auto")
+
+  local gossipToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  gossipToggle:SetPoint("LEFT", gossipLabel, "RIGHT", 6, 0)
+  gossipToggle:SetSize(24, 24)
+  gossipToggle:SetScript("OnClick", function(self)
+    TM.db.autoSelectGossip = self:GetChecked()
+  end)
+  gossipToggle:SetChecked(TM.db.autoSelectGossip ~= false)
+  gossipToggle:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("S\195\169lection dialogue PNJ automatique")
+    GameTooltip:AddLine("Si le leader clique sur une option de dialogue,", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("les membres qui ont la m\195\170me bulle PNJ ouverte", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("s\195\169lectionnent la m\195\170me option automatiquement.", 0.8, 0.8, 0.8)
+    GameTooltip:Show()
+  end)
+  gossipToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  ui.gossipToggle = gossipToggle
+
   -- Member input row
   local inputWidth = math.max(140, rightWidth - 220)
   ui.memberInput = CreateFrame("EditBox", nil, f, "InputBoxTemplate")

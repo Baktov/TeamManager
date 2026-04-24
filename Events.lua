@@ -38,6 +38,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
       if ui.debugToggle then ui.debugToggle:SetChecked(TM.debugEnabled) end
       if ui.stateToggle then ui.stateToggle:SetChecked(TM.db.showStateDisplay ~= false) end
       if ui.questToggle then ui.questToggle:SetChecked(TM.db.autoAcceptQuest ~= false) end
+      if ui.gossipToggle then ui.gossipToggle:SetChecked(TM.db.autoSelectGossip ~= false) end
       TM.RefreshTeamList()
       if not TM.selectedTeam then
         local saved = TM.LoadSelectedTeamForCharacter()
@@ -82,6 +83,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
     if ui.debugToggle then ui.debugToggle:SetChecked(TM.debugEnabled) end
     if ui.stateToggle then ui.stateToggle:SetChecked(TM.db.showStateDisplay ~= false) end
     if ui.questToggle then ui.questToggle:SetChecked(TM.db.autoAcceptQuest ~= false) end
+    if ui.gossipToggle then ui.gossipToggle:SetChecked(TM.db.autoSelectGossip ~= false) end
     TM.RefreshTeamList()
     -- Consume pending selection or restore from charDb
     local key = TM.GetCharacterKey()
@@ -200,3 +202,43 @@ questAutoFrame:SetScript("OnEvent", function(self, event, questID)
     TM.BroadcastQuestAccept(questID or 0)
   end
 end)
+
+-- Sélection automatique de dialogue PNJ (gossip) si le leader clique (si option activée)
+-- On accroche C_GossipInfo.SelectOption (retail) et SelectGossipOption (classic/compat)
+-- pour détecter le clic du leader et broadcaster aux membres.
+local _gossipBroadcastPending = false
+
+local function _onGossipSelect(optionID)
+  if _gossipBroadcastPending then return end  -- éviter double broadcast
+  if not (TM.db and TM.db.autoSelectGossip ~= false) then return end
+  local teamName = TM.selectedTeam
+  if not teamName then return end
+  local t = TM.db.teams and TM.db.teams[teamName]
+  if not t or not t.leader then return end
+  local leaderShort = t.leader:match("^(.-)%-") or t.leader
+  if leaderShort ~= UnitName("player") then return end
+  _gossipBroadcastPending = true
+  if TM.BroadcastGossipSelect then TM.BroadcastGossipSelect(optionID) end
+  _gossipBroadcastPending = false
+end
+
+-- Hook retail (C_GossipInfo.SelectOption)
+if C_GossipInfo and C_GossipInfo.SelectOption then
+  hooksecurefunc(C_GossipInfo, "SelectOption", function(optionID)
+    _onGossipSelect(optionID)
+  end)
+end
+
+-- Hook classic/compat (SelectGossipOption) — index converti en optionID si possible
+if SelectGossipOption then
+  hooksecurefunc("SelectGossipOption", function(index)
+    -- En retail C_GossipInfo.SelectOption se déclenche aussi → guard via pending
+    if _gossipBroadcastPending then return end
+    local optionID = index  -- fallback : utiliser l'index comme identifiant
+    if C_GossipInfo and C_GossipInfo.GetOptions then
+      local opts = C_GossipInfo.GetOptions()
+      if opts and opts[index] then optionID = opts[index].gossipOptionID or index end
+    end
+    _onGossipSelect(optionID)
+  end)
+end

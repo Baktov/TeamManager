@@ -96,6 +96,18 @@ function TM.BroadcastQuestAccept(questID)
   TM.DebugPrint("BroadcastQuestAccept questID=", questID)
 end
 
+-- Broadcast gossip option selection to group members (leader → members)
+-- optionID: gossipOptionID (retail) ou index (classic)
+function TM.BroadcastGossipSelect(optionID)
+  if not IsInGroup() then return end
+  local payload = "GOSSIP|" .. (optionID or 0)
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastGossipSelect optionID=", optionID)
+end
+
 -- Trigger XP broadcast on relevant events
 local xpSyncFrame = CreateFrame("Frame")
 xpSyncFrame:RegisterEvent("PLAYER_XP_UPDATE")
@@ -189,6 +201,23 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
       if QuestFrame and QuestFrame:IsShown() then
         AcceptQuest()
         TM.DebugPrint("Auto-accept qu\195\170te depuis leader")
+      end
+    end
+    return
+  end
+
+  -- Gossip auto-select: GOSSIP|optionID
+  if mtype == "GOSSIP" then
+    if TM.db and TM.db.autoSelectGossip ~= false then
+      local optionID = tonumber(msg:match("^GOSSIP|(.+)$"))
+      if optionID and GossipFrame and GossipFrame:IsShown() then
+        -- Retail : C_GossipInfo.SelectOption
+        if C_GossipInfo and C_GossipInfo.SelectOption then
+          C_GossipInfo.SelectOption(optionID)
+        else
+          SelectGossipOption(optionID)
+        end
+        TM.DebugPrint("Auto-select dialogue PNJ depuis leader, optionID=", optionID)
       end
     end
     return
