@@ -108,6 +108,18 @@ function TM.BroadcastGossipSelect(optionID)
   TM.DebugPrint("BroadcastGossipSelect optionID=", optionID)
 end
 
+-- Broadcast cinematic skip to group members (leader → members)
+-- kind: "cinematic" (moteur in-game) ou "movie" (vidéo pré-rendue)
+function TM.BroadcastCinematicSkip(kind)
+  if not IsInGroup() then return end
+  local payload = "CINESKIP|" .. (kind or "cinematic")
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastCinematicSkip kind=", kind)
+end
+
 -- Trigger XP broadcast on relevant events
 local xpSyncFrame = CreateFrame("Frame")
 xpSyncFrame:RegisterEvent("PLAYER_XP_UPDATE")
@@ -218,6 +230,25 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
           SelectGossipOption(optionID)
         end
         TM.DebugPrint("Auto-select dialogue PNJ depuis leader, optionID=", optionID)
+      end
+    end
+    return
+  end
+
+  -- Cinematic skip: CINESKIP|kind
+  if mtype == "CINESKIP" then
+    if TM.db and TM.db.autoSkipCinematic ~= false then
+      local kind = msg:match("^CINESKIP|(.+)$") or "cinematic"
+      if kind == "movie" then
+        if MovieFrame and MovieFrame:IsShown() and StopMovie then
+          StopMovie()
+          TM.DebugPrint("Auto-skip vid\195\169o depuis leader")
+        end
+      else
+        if CinematicFrame and CinematicFrame:IsShown() then
+          CancelCinematic()
+          TM.DebugPrint("Auto-skip cin\195\169matique depuis leader")
+        end
       end
     end
     return

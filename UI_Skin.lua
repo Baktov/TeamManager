@@ -47,6 +47,7 @@ function TM.ApplyElvUISkin()
   if ui.stateToggle then S:HandleCheckBox(ui.stateToggle) end
   if ui.questToggle then S:HandleCheckBox(ui.questToggle) end
   if ui.gossipToggle then S:HandleCheckBox(ui.gossipToggle) end
+  if ui.cinematicToggle then S:HandleCheckBox(ui.cinematicToggle) end
 
   TM.DebugPrint("ElvUI skin appliqué à TeamManager")
 end

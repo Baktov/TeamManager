@@ -39,6 +39,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
       if ui.stateToggle then ui.stateToggle:SetChecked(TM.db.showStateDisplay ~= false) end
       if ui.questToggle then ui.questToggle:SetChecked(TM.db.autoAcceptQuest ~= false) end
       if ui.gossipToggle then ui.gossipToggle:SetChecked(TM.db.autoSelectGossip ~= false) end
+      if ui.cinematicToggle then ui.cinematicToggle:SetChecked(TM.db.autoSkipCinematic ~= false) end
       TM.RefreshTeamList()
       if not TM.selectedTeam then
         local saved = TM.LoadSelectedTeamForCharacter()
@@ -84,6 +85,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
     if ui.stateToggle then ui.stateToggle:SetChecked(TM.db.showStateDisplay ~= false) end
     if ui.questToggle then ui.questToggle:SetChecked(TM.db.autoAcceptQuest ~= false) end
     if ui.gossipToggle then ui.gossipToggle:SetChecked(TM.db.autoSelectGossip ~= false) end
+    if ui.cinematicToggle then ui.cinematicToggle:SetChecked(TM.db.autoSkipCinematic ~= false) end
     TM.RefreshTeamList()
     -- Consume pending selection or restore from charDb
     local key = TM.GetCharacterKey()
@@ -240,5 +242,28 @@ if SelectGossipOption then
       if opts and opts[index] then optionID = opts[index].gossipOptionID or index end
     end
     _onGossipSelect(optionID)
+  end)
+end
+
+-- Passer les cinématiques automatiquement si le leader passe (option activée)
+local function _isLeader()
+  if not TM.selectedTeam then return false end
+  local t = TM.db and TM.db.teams and TM.db.teams[TM.selectedTeam]
+  if not t or not t.leader then return false end
+  local leaderShort = t.leader:match("^(.-)%-") or t.leader
+  return leaderShort == UnitName("player")
+end
+
+hooksecurefunc("CancelCinematic", function()
+  if not (TM.db and TM.db.autoSkipCinematic ~= false) then return end
+  if not _isLeader() then return end
+  if TM.BroadcastCinematicSkip then TM.BroadcastCinematicSkip("cinematic") end
+end)
+
+if StopMovie then
+  hooksecurefunc("StopMovie", function()
+    if not (TM.db and TM.db.autoSkipCinematic ~= false) then return end
+    if not _isLeader() then return end
+    if TM.BroadcastCinematicSkip then TM.BroadcastCinematicSkip("movie") end
   end)
 end

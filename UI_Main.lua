@@ -511,6 +511,29 @@ function TM.BuildUI()
   gossipToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
   ui.gossipToggle = gossipToggle
 
+  -- Option : passer les cinématiques automatiquement
+  local cinematicLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  cinematicLabel:SetPoint("TOPLEFT", gossipLabel, "BOTTOMLEFT", 0, -24)
+  cinematicLabel:SetText("Passer les cin\195\169matiques auto")
+
+  local cinematicToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  cinematicToggle:SetPoint("LEFT", cinematicLabel, "RIGHT", 6, 0)
+  cinematicToggle:SetSize(24, 24)
+  cinematicToggle:SetScript("OnClick", function(self)
+    TM.db.autoSkipCinematic = self:GetChecked()
+  end)
+  cinematicToggle:SetChecked(TM.db.autoSkipCinematic ~= false)
+  cinematicToggle:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("Passer les cin\195\169matiques automatiquement")
+    GameTooltip:AddLine("Si le leader passe (\195\137chap) une cin\195\169matique,", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("les membres qui regardent la m\195\170me cin\195\169matique", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("la passent automatiquement.", 0.8, 0.8, 0.8)
+    GameTooltip:Show()
+  end)
+  cinematicToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  ui.cinematicToggle = cinematicToggle
+
   -- Member input row
   local inputWidth = math.max(140, rightWidth - 220)
   ui.memberInput = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
