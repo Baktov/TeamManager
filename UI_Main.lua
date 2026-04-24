@@ -534,6 +534,29 @@ function TM.BuildUI()
   cinematicToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
   ui.cinematicToggle = cinematicToggle
 
+  -- Option : maître de vol automatique
+  local taxiLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  taxiLabel:SetPoint("TOPLEFT", cinematicLabel, "BOTTOMLEFT", 0, -24)
+  taxiLabel:SetText("Vol automatique (ma\195\174tre de vol)")
+
+  local taxiToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  taxiToggle:SetPoint("LEFT", taxiLabel, "RIGHT", 6, 0)
+  taxiToggle:SetSize(24, 24)
+  taxiToggle:SetScript("OnClick", function(self)
+    TM.db.autoTaxi = self:GetChecked()
+  end)
+  taxiToggle:SetChecked(TM.db.autoTaxi ~= false)
+  taxiToggle:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("Vol automatique")
+    GameTooltip:AddLine("Si le leader choisit une destination chez le ma\195\174tre de vol,", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("les membres qui ont la m\195\170me carte de vol ouverte", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("prennent automatiquement la m\195\170me destination.", 0.8, 0.8, 0.8)
+    GameTooltip:Show()
+  end)
+  taxiToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  ui.taxiToggle = taxiToggle
+
   -- Member input row
   local inputWidth = math.max(140, rightWidth - 220)
   ui.memberInput = CreateFrame("EditBox", nil, f, "InputBoxTemplate")

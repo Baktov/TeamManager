@@ -120,6 +120,18 @@ function TM.BroadcastCinematicSkip(kind)
   TM.DebugPrint("BroadcastCinematicSkip kind=", kind)
 end
 
+-- Broadcast taxi node selection to group members (leader → members)
+-- nodeIndex: index du noeud taxi sélectionné par le leader
+function TM.BroadcastTaxiNode(nodeIndex)
+  if not IsInGroup() then return end
+  local payload = "TAXI|" .. (nodeIndex or 0)
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastTaxiNode nodeIndex=", nodeIndex)
+end
+
 -- Trigger XP broadcast on relevant events
 local xpSyncFrame = CreateFrame("Frame")
 xpSyncFrame:RegisterEvent("PLAYER_XP_UPDATE")
@@ -248,6 +260,23 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
         if CinematicFrame and CinematicFrame:IsShown() then
           CancelCinematic()
           TM.DebugPrint("Auto-skip cin\195\169matique depuis leader")
+        end
+      end
+    end
+    return
+  end
+
+  -- Taxi auto-select: TAXI|nodeIndex
+  if mtype == "TAXI" then
+    if TM.db and TM.db.autoTaxi ~= false then
+      local nodeIndex = tonumber(msg:match("^TAXI|(.+)$"))
+      if nodeIndex then
+        -- Vérifier que la carte de vol est ouverte (TaxiFrame retail/classic ou FlightMapFrame)
+        local taxiOpen = (TaxiFrame and TaxiFrame:IsShown())
+                      or (FlightMapFrame and FlightMapFrame:IsShown())
+        if taxiOpen then
+          TakeTaxiNode(nodeIndex)
+          TM.DebugPrint("Auto-taxi depuis leader, nodeIndex=", nodeIndex)
         end
       end
     end

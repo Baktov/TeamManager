@@ -96,6 +96,7 @@ Une infobulle rappelle ces raccourcis au survol de chaque ligne.
 | **Accepter les quêtes auto** (checkbox) | Si le leader accepte une quête, les membres de la team qui ont la fenêtre de quête ouverte (même PNJ ciblé) acceptent automatiquement. Activé par défaut. |
 | **Sélection dialogue PNJ auto** (checkbox) | Si le leader clique sur une option de dialogue PNJ (phrase, cinématique…), les membres qui ont la même bulle de dialogue ouverte sélectionnent automatiquement la même option. Activé par défaut. |
 | **Passer les cinématiques auto** (checkbox) | Si le leader passe (Échap) une cinématique moteur in-game ou une vidéo pré-rendue, les membres qui regardent la même cinématique la passent automatiquement. Activé par défaut. |
+| **Vol automatique (maître de vol)** (checkbox) | Si le leader choisit une destination chez un maître de vol, les membres qui ont la même carte de vol ouverte prennent automatiquement la même destination. Activé par défaut. |
 
 ---
 

@@ -40,6 +40,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
       if ui.questToggle then ui.questToggle:SetChecked(TM.db.autoAcceptQuest ~= false) end
       if ui.gossipToggle then ui.gossipToggle:SetChecked(TM.db.autoSelectGossip ~= false) end
       if ui.cinematicToggle then ui.cinematicToggle:SetChecked(TM.db.autoSkipCinematic ~= false) end
+      if ui.taxiToggle then ui.taxiToggle:SetChecked(TM.db.autoTaxi ~= false) end
       TM.RefreshTeamList()
       if not TM.selectedTeam then
         local saved = TM.LoadSelectedTeamForCharacter()
@@ -86,6 +87,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
     if ui.questToggle then ui.questToggle:SetChecked(TM.db.autoAcceptQuest ~= false) end
     if ui.gossipToggle then ui.gossipToggle:SetChecked(TM.db.autoSelectGossip ~= false) end
     if ui.cinematicToggle then ui.cinematicToggle:SetChecked(TM.db.autoSkipCinematic ~= false) end
+    if ui.taxiToggle then ui.taxiToggle:SetChecked(TM.db.autoTaxi ~= false) end
     TM.RefreshTeamList()
     -- Consume pending selection or restore from charDb
     local key = TM.GetCharacterKey()
@@ -267,3 +269,10 @@ if StopMovie then
     if TM.BroadcastCinematicSkip then TM.BroadcastCinematicSkip("movie") end
   end)
 end
+
+-- Maître de vol automatique : broadcaster la destination choisie par le leader
+hooksecurefunc("TakeTaxiNode", function(nodeIndex)
+  if not (TM.db and TM.db.autoTaxi ~= false) then return end
+  if not _isLeader() then return end
+  if TM.BroadcastTaxiNode then TM.BroadcastTaxiNode(nodeIndex) end
+end)
