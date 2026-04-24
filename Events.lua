@@ -41,6 +41,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
       if ui.gossipToggle then ui.gossipToggle:SetChecked(TM.db.autoSelectGossip ~= false) end
       if ui.cinematicToggle then ui.cinematicToggle:SetChecked(TM.db.autoSkipCinematic ~= false) end
       if ui.taxiToggle then ui.taxiToggle:SetChecked(TM.db.autoTaxi ~= false) end
+      if ui.instanceToggle then ui.instanceToggle:SetChecked(TM.db.autoEnterInstance ~= false) end
       TM.RefreshTeamList()
       if not TM.selectedTeam then
         local saved = TM.LoadSelectedTeamForCharacter()
@@ -88,6 +89,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
     if ui.gossipToggle then ui.gossipToggle:SetChecked(TM.db.autoSelectGossip ~= false) end
     if ui.cinematicToggle then ui.cinematicToggle:SetChecked(TM.db.autoSkipCinematic ~= false) end
     if ui.taxiToggle then ui.taxiToggle:SetChecked(TM.db.autoTaxi ~= false) end
+    if ui.instanceToggle then ui.instanceToggle:SetChecked(TM.db.autoEnterInstance ~= false) end
     TM.RefreshTeamList()
     -- Consume pending selection or restore from charDb
     local key = TM.GetCharacterKey()
@@ -276,3 +278,20 @@ hooksecurefunc("TakeTaxiNode", function(nodeIndex)
   if not _isLeader() then return end
   if TM.BroadcastTaxiNode then TM.BroadcastTaxiNode(nodeIndex) end
 end)
+
+-- Entrée d'instance automatique : broadcaster quand le leader valide
+-- Cas 1 : proposition LFG (popup donjon prêt) — AcceptProposal
+hooksecurefunc("AcceptProposal", function()
+  if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
+  if not _isLeader() then return end
+  if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("lfg") end
+end)
+
+-- Cas 2 : portail de donjon dans le monde — ConfirmEnterInstance
+if ConfirmEnterInstance then
+  hooksecurefunc("ConfirmEnterInstance", function()
+    if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
+    if not _isLeader() then return end
+    if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("portal") end
+  end)
+end

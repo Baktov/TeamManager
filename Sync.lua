@@ -132,6 +132,18 @@ function TM.BroadcastTaxiNode(nodeIndex)
   TM.DebugPrint("BroadcastTaxiNode nodeIndex=", nodeIndex)
 end
 
+-- Broadcast instance enter confirmation to group members (leader → members)
+-- kind: "lfg" (proposition LFG) ou "portal" (portail monde)
+function TM.BroadcastInstanceEnter(kind)
+  if not IsInGroup() then return end
+  local payload = "INSTENTER|" .. (kind or "lfg")
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastInstanceEnter kind=", kind)
+end
+
 -- Trigger XP broadcast on relevant events
 local xpSyncFrame = CreateFrame("Frame")
 xpSyncFrame:RegisterEvent("PLAYER_XP_UPDATE")
@@ -277,6 +289,33 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
         if taxiOpen then
           TakeTaxiNode(nodeIndex)
           TM.DebugPrint("Auto-taxi depuis leader, nodeIndex=", nodeIndex)
+        end
+      end
+    end
+    return
+  end
+
+  -- Instance enter auto: INSTENTER|kind
+  if mtype == "INSTENTER" then
+    if TM.db and TM.db.autoEnterInstance ~= false then
+      local kind = msg:match("^INSTENTER|(.+)$") or "lfg"
+      if kind == "portal" then
+        -- Portail monde : popup StaticPopup de type CONFIRM_ENTER_INSTANCE
+        if ConfirmEnterInstance then
+          for i = 1, 10 do
+            local popup = _G["StaticPopup" .. i]
+            if popup and popup:IsShown() and popup.which == "CONFIRM_ENTER_INSTANCE" then
+              ConfirmEnterInstance()
+              TM.DebugPrint("Auto-enter portail donjon depuis leader")
+              break
+            end
+          end
+        end
+      else
+        -- LFG : proposition de donjon prête
+        if LFGDungeonReadyDialog and LFGDungeonReadyDialog:IsShown() then
+          AcceptProposal()
+          TM.DebugPrint("Auto-accept proposition LFG depuis leader")
         end
       end
     end

@@ -557,6 +557,29 @@ function TM.BuildUI()
   taxiToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
   ui.taxiToggle = taxiToggle
 
+  -- Option : entrée d'instance automatique
+  local instanceLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  instanceLabel:SetPoint("TOPLEFT", taxiLabel, "BOTTOMLEFT", 0, -24)
+  instanceLabel:SetText("Entrée instance auto (gouffre)")
+
+  local instanceToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  instanceToggle:SetPoint("LEFT", instanceLabel, "RIGHT", 6, 0)
+  instanceToggle:SetSize(24, 24)
+  instanceToggle:SetScript("OnClick", function(self)
+    TM.db.autoEnterInstance = self:GetChecked()
+  end)
+  instanceToggle:SetChecked(TM.db.autoEnterInstance ~= false)
+  instanceToggle:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("Entrée d'instance automatique")
+    GameTooltip:AddLine("Si le leader valide l'entrée d'un donjon (gouffre)", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("ou accepte une proposition de donjons LFG,", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("les membres qui ont la même fenêtre valident automatiquement.", 0.8, 0.8, 0.8)
+    GameTooltip:Show()
+  end)
+  instanceToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  ui.instanceToggle = instanceToggle
+
   -- Member input row
   local inputWidth = math.max(140, rightWidth - 220)
   ui.memberInput = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
