@@ -1,0 +1,15 @@
+## Interface: 120000
+## Title: TeamManager
+## Notes: Gérer des équipes multiboxing (responsable + acolytes). Commandes slash: /tm
+## Author: Generated
+## Version: 1.1
+## SavedVariables: TeamManagerDB
+## SavedVariablesPerCharacter: TeamManagerCharDB
+Core.lua
+Sync.lua
+UI_Skin.lua
+UI_Floating.lua
+UI_Minimap.lua
+UI_Main.lua
+Commands.lua
+Events.lua

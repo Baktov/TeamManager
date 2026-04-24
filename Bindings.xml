@@ -1,0 +1,17 @@
+<Bindings>
+  <Binding name="TEAMMANAGER_SETLEADER" header="TEAMMANAGER" category="Team Manager">
+    TEAMMANAGER_SETLEADER()
+  </Binding>
+  <Binding name="TEAMMANAGER_FOLLOW" header="TEAMMANAGER" category="Team Manager">
+    TEAMMANAGER_FOLLOW()
+  </Binding>
+  <Binding name="TEAMMANAGER_ASSIST" header="TEAMMANAGER" category="Team Manager">
+    TEAMMANAGER_ASSIST()
+  </Binding>
+  <Binding name="TEAMMANAGER_INVITE" header="TEAMMANAGER" category="Team Manager">
+    TEAMMANAGER_INVITE()
+  </Binding>
+  <Binding name="TEAMMANAGER_TOGGLEUI" header="TEAMMANAGER" category="Team Manager">
+    TEAMMANAGER_TOGGLEUI()
+  </Binding>
+</Bindings>
