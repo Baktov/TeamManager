@@ -216,44 +216,107 @@ questAutoFrame:SetScript("OnEvent", function(self, event, questID)
 end)
 
 -- Auto-valider (remettre) les quêtes si le leader valide (si option activée)
--- CompleteQuest() est appelé quand le leader clique "Terminer la quête" sur le panel de
--- progression (QUEST_PROGRESS) pour avancer vers le panel de récompenses.
-do
-  local hasCompleteQuest = (CompleteQuest ~= nil)
-  local hasGetQuestReward = (GetQuestReward ~= nil)
-  -- Ce print s'affiche au chargement de l'addon : confirme que les hooks sont enregistrés
-  C_Timer.After(3, function()
-    TM.Print("[TM Events] CompleteQuest=" .. tostring(hasCompleteQuest) .. " GetQuestReward=" .. tostring(hasGetQuestReward))
+-- L'UI Blizzard appelle CompleteQuest() depuis QuestProgressCompleteButton_OnClick
+-- et GetQuestReward(choice) depuis QuestRewardCompleteButton_OnClick
+-- (cf. wow-ui-source/Blizzard_UIPanels_Game/Mainline/QuestFrame.lua).
+-- On hooke en priorité le clic des BOUTONS UI (path le plus fiable et utilisé par le
+-- joueur en pratique), et on garde un hook sur les globales en filet de sécurité.
+local _questValidateBroadcastPending = false
+local _questRewardBroadcastPending   = false
+
+local function _broadcastQuestValidateOnce()
+  if _questValidateBroadcastPending then return end
+  if not (TM.db and TM.db.autoValidateQuest ~= false) then return end
+  if not _isLeader() then return end
+  _questValidateBroadcastPending = true
+  local questID = (GetQuestID and GetQuestID()) or 0
+  if TM.BroadcastQuestValidate then TM.BroadcastQuestValidate(questID) end
+  TM.DebugPrint("Broadcast QVALIDATE questID=", questID)
+  -- Reset flag après la frame courante (les hooks UI/globaux peuvent se chaîner)
+  C_Timer.After(0, function() _questValidateBroadcastPending = false end)
+end
+
+local function _broadcastQuestRewardOnce(choice)
+  if _questRewardBroadcastPending then return end
+  if not (TM.db and TM.db.autoValidateQuest ~= false) then return end
+  if not _isLeader() then return end
+  _questRewardBroadcastPending = true
+  local questID = (GetQuestID and GetQuestID()) or 0
+  if TM.BroadcastQuestReward then TM.BroadcastQuestReward(questID, choice or 0) end
+  TM.DebugPrint("Broadcast QREWARD questID=", questID, "choice=", choice)
+  C_Timer.After(0, function() _questRewardBroadcastPending = false end)
+end
+
+-- Hook 1 (prioritaire) : clic du bouton "Continuer" sur le panel de progression
+if QuestFrameCompleteButton then
+  QuestFrameCompleteButton:HookScript("OnClick", function()
+    TM.DebugPrint("QuestFrameCompleteButton OnClick (panel progression)")
+    _broadcastQuestValidateOnce()
   end)
 end
 
+-- Hook 2 (prioritaire) : clic du bouton "Terminer la quête" sur le panel de récompenses
+if QuestFrameCompleteQuestButton then
+  QuestFrameCompleteQuestButton:HookScript("OnClick", function()
+    TM.DebugPrint("QuestFrameCompleteQuestButton OnClick (panel récompenses)")
+    local choice = (QuestInfoFrame and QuestInfoFrame.itemChoice) or 0
+    _broadcastQuestRewardOnce(choice)
+  end)
+end
+
+-- Hook 3 (filet de sécurité) : appel direct du global CompleteQuest()
 if CompleteQuest then
   hooksecurefunc("CompleteQuest", function()
-    TM.Print("[TM] CompleteQuest hook: autoValidateQuest=", tostring(TM.db and TM.db.autoValidateQuest), "isLeader=", tostring(_isLeader()))
-    if not (TM.db and TM.db.autoValidateQuest ~= false) then return end
-    if not _isLeader() then return end
-    local questID = (GetQuestID and GetQuestID()) or 0
-    if TM.BroadcastQuestValidate then
-      TM.BroadcastQuestValidate(questID)
-    end
-    TM.Print("[TM] Broadcast QVALIDATE questID=", questID)
+    TM.DebugPrint("hooksecurefunc CompleteQuest")
+    _broadcastQuestValidateOnce()
   end)
 end
 
--- GetQuestReward() est appelé quand le leader clique "Terminer" sur le panel de récompenses
--- (QuestFrameRewardPanel). C'est cette API qui remet vraiment la quête.
+-- Hook 4 (filet de sécurité) : appel direct du global GetQuestReward()
 if GetQuestReward then
   hooksecurefunc("GetQuestReward", function(choice)
-    TM.Print("[TM] GetQuestReward hook: autoValidateQuest=", tostring(TM.db and TM.db.autoValidateQuest), "isLeader=", tostring(_isLeader()))
-    if not (TM.db and TM.db.autoValidateQuest ~= false) then return end
-    if not _isLeader() then return end
-    local questID = (GetQuestID and GetQuestID()) or 0
-    if TM.BroadcastQuestReward then
-      TM.BroadcastQuestReward(questID, choice or 0)
-    end
-    TM.Print("[TM] Broadcast QREWARD questID=", questID, "choice=", choice)
+    TM.DebugPrint("hooksecurefunc GetQuestReward choice=", choice)
+    _broadcastQuestRewardOnce(choice)
   end)
 end
+
+-- Hook 5 (filet ultime) : événement serveur QUEST_TURNED_IN
+-- Cet event est émis par le serveur APRÈS qu'une quête est remise, indépendamment
+-- de l'UI utilisée (Blizzard, DialogueUI, etc.). On l'utilise pour broadcaster aux
+-- membres au cas où aucun des hooks précédents n'aurait capté la remise.
+-- NB : la quête est déjà remise sur le leader → les membres qui ont le panel ouvert
+-- valident en réaction. Le `choice` n'est pas connu (toujours 0) → suffisant si la
+-- quête a une seule récompense ou aucune.
+local questTurnedInFrame = CreateFrame("Frame")
+questTurnedInFrame:RegisterEvent("QUEST_TURNED_IN")
+questTurnedInFrame:SetScript("OnEvent", function(self, event, questID)
+  TM.DebugPrint("QUEST_TURNED_IN event questID=", questID)
+  if not (TM.db and TM.db.autoValidateQuest ~= false) then return end
+  if not _isLeader() then return end
+  -- Broadcast les deux étapes en cascade : QVALIDATE puis QREWARD
+  -- Le membre qui aurait raté QVALIDATE bénéficiera du QREWARD direct
+  if TM.BroadcastQuestValidate and not _questValidateBroadcastPending then
+    _questValidateBroadcastPending = true
+    TM.BroadcastQuestValidate(questID or 0)
+    TM.DebugPrint("Broadcast QVALIDATE (QUEST_TURNED_IN) questID=", questID)
+    C_Timer.After(0, function() _questValidateBroadcastPending = false end)
+  end
+  if TM.BroadcastQuestReward and not _questRewardBroadcastPending then
+    _questRewardBroadcastPending = true
+    TM.BroadcastQuestReward(questID or 0, 0)
+    TM.DebugPrint("Broadcast QREWARD (QUEST_TURNED_IN) questID=", questID)
+    C_Timer.After(0, function() _questRewardBroadcastPending = false end)
+  end
+end)
+
+-- Diagnostic au chargement (uniquement si debug activé)
+C_Timer.After(3, function()
+  TM.DebugPrint("Quest hooks status:",
+    "CompleteButton=", tostring(QuestFrameCompleteButton ~= nil),
+    "CompleteQuestButton=", tostring(QuestFrameCompleteQuestButton ~= nil),
+    "CompleteQuest=", tostring(CompleteQuest ~= nil),
+    "GetQuestReward=", tostring(GetQuestReward ~= nil))
+end)
 
 -- Sélection automatique de dialogue PNJ (gossip) si le leader clique (si option activée)
 -- En retail, le clic sur une option appelle C_GossipInfo.SelectOptionByIndex(orderIndex)
@@ -276,7 +339,10 @@ local function _resolveGossipOptionID(orderIndex)
   return nil
 end
 
-local function _onGossipBroadcast(gossipOptionID)
+local function _onGossipBroadcast(gossipOptionID, source)
+  TM.DebugPrint("[GossipHook]", source or "?", "gossipOptionID=", tostring(gossipOptionID),
+    "isLeader=", tostring(_isLeader()),
+    "autoSelectGossip=", tostring(TM.db and TM.db.autoSelectGossip))
   if _gossipBroadcastPending then return end
   if not gossipOptionID then return end
   if not (TM.db and TM.db.autoSelectGossip ~= false) then return end
@@ -290,14 +356,14 @@ end
 if C_GossipInfo and C_GossipInfo.SelectOptionByIndex then
   hooksecurefunc(C_GossipInfo, "SelectOptionByIndex", function(orderIndex)
     local gid = _resolveGossipOptionID(orderIndex)
-    _onGossipBroadcast(gid)
+    _onGossipBroadcast(gid, "SelectOptionByIndex(" .. tostring(orderIndex) .. ")")
   end)
 end
 
 -- Hook secondaire : C_GossipInfo.SelectOption(gossipOptionID, ...) (appel direct)
 if C_GossipInfo and C_GossipInfo.SelectOption then
   hooksecurefunc(C_GossipInfo, "SelectOption", function(gossipOptionID)
-    _onGossipBroadcast(gossipOptionID)
+    _onGossipBroadcast(gossipOptionID, "C_GossipInfo.SelectOption")
   end)
 end
 
@@ -305,7 +371,7 @@ end
 if SelectGossipOption then
   hooksecurefunc("SelectGossipOption", function(index)
     local gid = _resolveGossipOptionID(index) or index
-    _onGossipBroadcast(gid)
+    _onGossipBroadcast(gid, "SelectGossipOption(" .. tostring(index) .. ")")
   end)
 end
 

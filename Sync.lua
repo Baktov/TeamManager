@@ -239,6 +239,23 @@ xpSyncFrame:SetScript("OnEvent", function(self, event)
   end
 end)
 
+-- ─── Handler GOSSIP_SHOW : mémoriser que le serveur a un gossip actif ────
+-- DialogueUI / Immersion masquent GossipFrame Blizzard, donc on ne peut pas se
+-- baser sur sa visibilité côté receveur. On mémorise la fenêtre de fraîcheur
+-- (~10s) pendant laquelle C_GossipInfo.SelectOptionByIndex/SelectOption est
+-- accepté par le serveur, indépendamment de l'UI affichée.
+local gossipShowFrame = CreateFrame("Frame")
+gossipShowFrame:RegisterEvent("GOSSIP_SHOW")
+gossipShowFrame:RegisterEvent("GOSSIP_CLOSED")
+gossipShowFrame:SetScript("OnEvent", function(self, event)
+  if event == "GOSSIP_SHOW" then
+    TM.gossipReadyAt = GetTime()
+    TM.DebugPrint("[GossipEvent] GOSSIP_SHOW (gossipReadyAt mémorisé)")
+  elseif event == "GOSSIP_CLOSED" then
+    TM.DebugPrint("[GossipEvent] GOSSIP_CLOSED")
+  end
+end)
+
 -- ─── Handlers événements quête côté membre ────────────────────────────────
 -- QUEST_DETAIL          → mémorise questID offert ; si QACCEPT pending → RequestLoadQuestByID
 -- QUEST_DATA_LOAD_RESULT → si questID correspond au pending QACCEPT → AcceptQuest()
@@ -252,7 +269,6 @@ questDetailAutoFrame:RegisterEvent("QUEST_PROGRESS")
 questDetailAutoFrame:RegisterEvent("QUEST_COMPLETE")
 questDetailAutoFrame:RegisterEvent("QUEST_FINISHED")
 questDetailAutoFrame:SetScript("OnEvent", function(self, event, arg1)
-
   -- ── QUEST_DETAIL : quête proposée ──────────────────────────────────────
   if event == "QUEST_DETAIL" then
     local questID = GetQuestID and GetQuestID() or 0
@@ -291,6 +307,10 @@ questDetailAutoFrame:SetScript("OnEvent", function(self, event, arg1)
     local questID = GetQuestID and GetQuestID() or 0
     if questID == 0 then return end
     TM.pendingQuestProgressID = questID
+    -- Mémorise un "flag de fraîcheur" : utile si DialogueUI ferme le panel après l'event
+    -- mais que le serveur accepte encore CompleteQuest() pendant quelques secondes.
+    TM.questProgressReadyAt = GetTime()
+    TM.questProgressReadyID = questID
     if TM.pendingAutoValidateQuestID and
        (TM.pendingAutoValidateQuestID == 0 or TM.pendingAutoValidateQuestID == questID) then
       if not (TM.db and TM.db.autoValidateQuest ~= false) then
@@ -301,7 +321,7 @@ questDetailAutoFrame:SetScript("OnEvent", function(self, event, arg1)
       C_Timer.After(0, function()
         if IsQuestCompletable() then
           CompleteQuest()
-          TM.Print("[TM] Auto-CompleteQuest (QUEST_PROGRESS+pending) questID=", questID)
+          TM.DebugPrint("Auto-CompleteQuest (QUEST_PROGRESS+pending) questID=", questID)
         else
           TM.DebugPrint("Auto-CompleteQuest: quête non completable questID=", questID)
         end
@@ -310,17 +330,27 @@ questDetailAutoFrame:SetScript("OnEvent", function(self, event, arg1)
 
   -- ── QUEST_COMPLETE : panel récompenses prêt → GetQuestReward si pending ─
   elseif event == "QUEST_COMPLETE" then
+    -- Mémorise un "flag de fraîcheur" : DialogueUI cache immédiatement le QuestFrame
+    -- Blizzard après cet event, donc rewardsReady redevient false. Mais le serveur
+    -- accepte GetQuestReward() pendant ~10s. On enregistre questID + timestamp pour
+    -- que le handler QREWARD (qui peut arriver après) puisse forcer l'appel.
+    local questID = GetQuestID and GetQuestID() or 0
+    if questID > 0 then
+      TM.questCompleteReadyAt = GetTime()
+      TM.questCompleteReadyID = questID
+      TM.DebugPrint("QUEST_COMPLETE mémorisé questID=", questID)
+    end
     if TM.pendingAutoRewardQuestID then
-      local questID  = TM.pendingAutoRewardQuestID
+      local pQuestID = TM.pendingAutoRewardQuestID
       local choice   = TM.pendingAutoRewardChoice or 0
-      local localID  = GetQuestID and GetQuestID() or 0
-      if questID == 0 or localID == questID then
+      local localID  = questID
+      if pQuestID == 0 or localID == pQuestID then
         TM.pendingAutoRewardQuestID = nil
         TM.pendingAutoRewardChoice  = nil
         if not (TM.db and TM.db.autoValidateQuest ~= false) then return end
         C_Timer.After(0, function()
           GetQuestReward(choice)
-          TM.Print("[TM] Auto-GetQuestReward (QUEST_COMPLETE+pending) questID=", questID, "choice=", choice)
+          TM.DebugPrint("Auto-GetQuestReward (QUEST_COMPLETE+pending) questID=", pQuestID, "choice=", choice)
         end)
       end
     end
@@ -431,8 +461,13 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
 
   -- Quest validate step 1: QVALIDATE|questID
   -- Le QVALIDATE peut arriver avant ou après QUEST_PROGRESS côté membre.
+  -- Compat DialogueUI/Immersion : ces addons consomment souvent QUEST_PROGRESS sans le
+  -- propager. On tente donc aussi un appel direct si IsQuestCompletable() retourne vrai
+  -- (état serveur, indépendant de l'UI), ou si QUEST_PROGRESS a été vu récemment
+  -- (TM.questProgressReadyAt) même si DialogueUI a depuis fermé le panel.
   if mtype == "QVALIDATE" then
-    TM.DebugPrint("QVALIDATE reçu: autoValidateQuest=", tostring(TM.db and TM.db.autoValidateQuest), "pendingProgressID=", tostring(TM.pendingQuestProgressID))
+    local progressReady = TM.questProgressReadyAt and (GetTime() - TM.questProgressReadyAt < 10)
+    TM.DebugPrint("QVALIDATE reçu: autoValidateQuest=", tostring(TM.db and TM.db.autoValidateQuest), "pendingProgressID=", tostring(TM.pendingQuestProgressID), "IsQuestCompletable=", tostring(IsQuestCompletable and IsQuestCompletable()), "progressReady=", tostring(progressReady))
     if TM.db and TM.db.autoValidateQuest ~= false then
       local questID = tonumber(msg:match("^QVALIDATE|(.+)$")) or 0
       -- Cas 1 : QUEST_PROGRESS a déjà eu lieu (panel de progression actif)
@@ -442,16 +477,39 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
         C_Timer.After(0, function()
           if IsQuestCompletable() then
             CompleteQuest()
-            TM.Print("[TM] Auto-CompleteQuest questID=", resolvedID)
+            TM.DebugPrint("Auto-CompleteQuest questID=", resolvedID)
           else
             TM.DebugPrint("Auto-CompleteQuest: quête non completable questID=", resolvedID)
           end
         end)
+      -- Cas 1bis : QUEST_PROGRESS vu récemment (DialogueUI a fermé le panel mais
+      -- le serveur accepte encore CompleteQuest pendant quelques secondes)
+      elseif progressReady and (questID == 0 or TM.questProgressReadyID == questID) then
+        local resolvedID = TM.questProgressReadyID
+        C_Timer.After(0, function()
+          if IsQuestCompletable() then
+            CompleteQuest()
+            TM.DebugPrint("Auto-CompleteQuest (progressReady recent) questID=", resolvedID)
+          else
+            TM.DebugPrint("Auto-CompleteQuest: quête non completable (progressReady) questID=", resolvedID)
+          end
+        end)
+      -- Cas 1ter : pas de QUEST_PROGRESS pending mais le serveur indique completable
+      elseif IsQuestCompletable and IsQuestCompletable() then
+        local localID = GetQuestID and GetQuestID() or 0
+        if questID == 0 or localID == questID or localID == 0 then
+          C_Timer.After(0, function()
+            if IsQuestCompletable() then
+              CompleteQuest()
+              TM.DebugPrint("Auto-CompleteQuest (fallback IsQuestCompletable) questID=", questID)
+            end
+          end)
+        end
       else
         -- Cas 2 : QUEST_PROGRESS pas encore déclenché → stocker et attendre
         TM.pendingAutoValidateQuestID = questID
         TM.DebugPrint("Auto-CompleteQuest en attente QUEST_PROGRESS questID=", questID)
-        C_Timer.After(30, function()
+        C_Timer.After(60, function()
           if TM.pendingAutoValidateQuestID == questID then
             TM.pendingAutoValidateQuestID = nil
             TM.DebugPrint("Auto-CompleteQuest: timeout questID=", questID)
@@ -464,25 +522,42 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
 
   -- Quest validate step 2: QREWARD|questID|choice
   -- Le QREWARD peut arriver avant que QUEST_COMPLETE soit traité côté membre.
+  -- Compat DialogueUI/Immersion : ces addons cachent QuestFrameRewardPanel dès que
+  -- QUEST_COMPLETE est émis, donc rewardsReady redevient false. On utilise le flag
+  -- TM.questCompleteReadyAt (positionné dans le handler QUEST_COMPLETE) pour détecter
+  -- que le serveur accepte encore GetQuestReward() même si l'UI Blizzard est cachée.
   if mtype == "QREWARD" then
-    TM.DebugPrint("QREWARD reçu: autoValidateQuest=", tostring(TM.db and TM.db.autoValidateQuest), "RewardPanel=", tostring(QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()))
+    local rewardsReady = (GetNumQuestChoices and GetNumQuestChoices() or 0) > 0
+                       or (GetNumQuestRewards and GetNumQuestRewards() or 0) > 0
+                       or (QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown())
+    local completeReady = TM.questCompleteReadyAt and (GetTime() - TM.questCompleteReadyAt < 10)
+    TM.DebugPrint("QREWARD reçu: autoValidateQuest=", tostring(TM.db and TM.db.autoValidateQuest), "RewardPanel=", tostring(QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()), "rewardsReady=", tostring(rewardsReady), "completeReady=", tostring(completeReady), "questCompleteReadyID=", tostring(TM.questCompleteReadyID))
     if TM.db and TM.db.autoValidateQuest ~= false then
       local parts = {}
       for p in (msg .. "|"):gmatch("(.-)|" ) do parts[#parts + 1] = p end
       local questID = tonumber(parts[2]) or 0
       local choice  = tonumber(parts[3]) or 0
-      -- Cas 1 : QuestFrameRewardPanel déjà affiché
       local localID = GetQuestID and GetQuestID() or 0
-      if QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()
-         and (questID == 0 or localID == questID) then
-        GetQuestReward(choice)
-        TM.Print("[TM] Auto-GetQuestReward (immédiat) questID=", questID, "choice=", choice)
+      -- Cas 1 : panel récompenses prêt (UI Blizzard, DialogueUI ou état serveur OK)
+      if rewardsReady and (questID == 0 or localID == questID or localID == 0) then
+        C_Timer.After(0, function()
+          GetQuestReward(choice)
+          TM.DebugPrint("Auto-GetQuestReward (immédiat/rewardsReady) questID=", questID, "choice=", choice)
+        end)
+      -- Cas 1bis : QUEST_COMPLETE vu récemment (DialogueUI a caché le panel mais
+      -- le serveur accepte encore GetQuestReward pendant quelques secondes)
+      elseif completeReady and (questID == 0 or TM.questCompleteReadyID == questID) then
+        local resolvedID = TM.questCompleteReadyID
+        C_Timer.After(0, function()
+          GetQuestReward(choice)
+          TM.DebugPrint("Auto-GetQuestReward (completeReady recent) questID=", resolvedID, "choice=", choice)
+        end)
       else
         -- Cas 2 : QUEST_COMPLETE pas encore traité → stocker et attendre
         TM.pendingAutoRewardQuestID = questID
         TM.pendingAutoRewardChoice  = choice
         TM.DebugPrint("Auto-GetQuestReward en attente QUEST_COMPLETE questID=", questID)
-        C_Timer.After(30, function()
+        C_Timer.After(60, function()
           if TM.pendingAutoRewardQuestID == questID then
             TM.pendingAutoRewardQuestID = nil
             TM.pendingAutoRewardChoice  = nil
@@ -501,18 +576,26 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
   if mtype == "GOSSIP" then
     if TM.db and TM.db.autoSelectGossip ~= false then
       local gossipOptionID = tonumber(msg:match("^GOSSIP|(.+)$"))
-      if gossipOptionID and GossipFrame and GossipFrame:IsShown() then
+      -- Compatibilité DialogueUI / Immersion : ne pas se baser sur GossipFrame:IsShown(),
+      -- mais sur la disponibilité côté serveur (C_GossipInfo.GetOptions non vide)
+      -- ou sur la fenêtre de fraîcheur (10s après GOSSIP_SHOW).
+      local opts = (C_GossipInfo and C_GossipInfo.GetOptions) and C_GossipInfo.GetOptions() or nil
+      local hasOpts = opts and #opts > 0
+      local gossipFresh = TM.gossipReadyAt and (GetTime() - TM.gossipReadyAt < 10)
+      local frameShown = GossipFrame and GossipFrame:IsShown()
+      TM.DebugPrint("GOSSIP reçu: gossipOptionID=", gossipOptionID,
+        "hasOpts=", tostring(hasOpts),
+        "gossipFresh=", tostring(gossipFresh),
+        "GossipFrame:IsShown=", tostring(frameShown))
+      if gossipOptionID and (hasOpts or gossipFresh or frameShown) then
         local handled = false
-        if C_GossipInfo and C_GossipInfo.GetOptions and C_GossipInfo.SelectOptionByIndex then
-          local opts = C_GossipInfo.GetOptions()
-          if opts then
-            for _, info in ipairs(opts) do
-              if info.gossipOptionID == gossipOptionID and info.orderIndex then
-                C_GossipInfo.SelectOptionByIndex(info.orderIndex)
-                TM.DebugPrint("Auto-select dialogue PNJ depuis leader, gossipOptionID=", gossipOptionID, "orderIndex=", info.orderIndex)
-                handled = true
-                break
-              end
+        if hasOpts and C_GossipInfo and C_GossipInfo.SelectOptionByIndex then
+          for _, info in ipairs(opts) do
+            if info.gossipOptionID == gossipOptionID and info.orderIndex then
+              C_GossipInfo.SelectOptionByIndex(info.orderIndex)
+              TM.DebugPrint("Auto-select dialogue PNJ depuis leader, gossipOptionID=", gossipOptionID, "orderIndex=", info.orderIndex)
+              handled = true
+              break
             end
           end
         end
@@ -530,6 +613,8 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
         if not handled then
           TM.DebugPrint("Auto-select dialogue PNJ : option non trouvée localement, gossipOptionID=", gossipOptionID)
         end
+      else
+        TM.DebugPrint("GOSSIP ignoré : aucun gossip actif côté membre (gossipOptionID=", gossipOptionID, ")")
       end
     end
     return
