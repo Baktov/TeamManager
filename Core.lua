@@ -92,6 +92,243 @@ function TM.DebugPrint(...)
   end
 end
 
+-- AcceptProposal() est une fonction protégée : elle ne peut être appelée que depuis
+-- le Lua restreint (SecureHandlerBaseTemplate._onattributechanged).
+-- Deux corrections critiques vs versions précédentes :
+--   1. C_Timer.After(0) pour échapper au contexte CHAT_MSG_ADDON (qui bloque les handlers)
+--   2. Compteur monotone (_seq) pour garantir que l'attribut CHANGE toujours
+--   3. Pas de SetAttribute récursif dans le handler (cause d'erreurs silencieuses)
+do
+  local _f = CreateFrame("Frame", "TM_SecureAcceptFrame", UIParent, "SecureHandlerBaseTemplate")
+  local _seq = 0
+
+  -- Handler restreint : toutes les APIs d'entrée connues pour LFG/Delves TWW
+  _f:SetAttribute("_onattributechanged", [[
+    if name ~= "tm-accept" then return end
+    -- LFGTeleport(false) = téléporter vers l'instance LFG/Delve (TWW)
+    LFGTeleport(false)
+    -- AcceptProposal = accepter une proposition LFG standard
+    AcceptProposal()
+    -- ConfirmEnterInstance = portails / instances monde
+    ConfirmEnterInstance()
+    -- Cliquer LFGDungeonReadyDialogEnterDungeonButton (même si visible=false)
+    local enterBtn = self:GetFrameRef("lfgEnterBtn")
+    if enterBtn then enterBtn:Click() end
+    -- StaticPopup Button1 visible
+    local btn
+    btn = self:GetFrameRef("sp1")
+    if btn and btn:IsShown() then btn:Click() end
+    btn = self:GetFrameRef("sp2")
+    if btn and btn:IsShown() then btn:Click() end
+    btn = self:GetFrameRef("sp3")
+    if btn and btn:IsShown() then btn:Click() end
+    btn = self:GetFrameRef("sp4")
+    if btn and btn:IsShown() then btn:Click() end
+  ]])
+
+  function TM.AcceptInstanceProposal()
+    if InCombatLockdown() then
+      TM.DebugPrint("AcceptInstanceProposal: en combat, skip")
+      return false
+    end
+    -- Refs StaticPopup Button1
+    for i = 1, 4 do
+      local btn = _G["StaticPopup" .. i .. "Button1"]
+      if btn then _f:SetFrameRef("sp" .. i, btn) end
+    end
+    -- Ref LFGDungeonReadyDialogEnterDungeonButton (cliquable même si visible=false)
+    local enterBtn = _G["LFGDungeonReadyDialogEnterDungeonButton"]
+    if enterBtn then _f:SetFrameRef("lfgEnterBtn", enterBtn) end
+    _seq = _seq + 1
+    local s = tostring(_seq)
+    -- C_Timer.After(0) : échappe le contexte CHAT_MSG_ADDON
+    C_Timer.After(0, function()
+      _f:SetAttribute("tm-accept", s)
+      TM.DebugPrint("AcceptInstanceProposal: SecureHandler déclenché (seq=" .. s .. ")")
+    end)
+    return true
+  end
+end
+
+-- Validation de sortie de Gouffre (Delve TWW) : clic sur StaticPopup Button1 uniquement.
+-- N'appelle PAS les APIs d'entrée (LFGTeleport / AcceptProposal / ConfirmEnterInstance).
+do
+  local _fExit = CreateFrame("Frame", "TM_SecureExitFrame", UIParent, "SecureHandlerBaseTemplate")
+  local _seqExit = 0
+
+  _fExit:SetAttribute("_onattributechanged", [[
+    if name ~= "tm-exit" then return end
+    -- LFGTeleport(true) = quitter l'instance LFG/Delve (TWW) sans popup
+    LFGTeleport(true)
+    -- Fallback : StaticPopup Button1 si une popup de confirmation est présente
+    local btn
+    btn = self:GetFrameRef("sp1")
+    if btn and btn:IsShown() then btn:Click() end
+    btn = self:GetFrameRef("sp2")
+    if btn and btn:IsShown() then btn:Click() end
+    btn = self:GetFrameRef("sp3")
+    if btn and btn:IsShown() then btn:Click() end
+    btn = self:GetFrameRef("sp4")
+    if btn and btn:IsShown() then btn:Click() end
+  ]])
+
+  function TM.ConfirmDelveExit()
+    if InCombatLockdown() then
+      TM.DebugPrint("ConfirmDelveExit: en combat, skip")
+      return false
+    end
+    for i = 1, 4 do
+      local btn = _G["StaticPopup" .. i .. "Button1"]
+      if btn then _fExit:SetFrameRef("sp" .. i, btn) end
+    end
+    _seqExit = _seqExit + 1
+    local s = tostring(_seqExit)
+    C_Timer.After(0, function()
+      _fExit:SetAttribute("tm-exit", s)
+      TM.DebugPrint("ConfirmDelveExit: SecureHandler déclenché (seq=" .. s .. ")")
+    end)
+    return true
+  end
+end
+
+-- Polling : vérifie toutes les 0.5s si un StaticPopup de sortie est apparu.
+-- Utilisé côté membre quand DELVEEXIT reçu avant que la popup n'apparaisse.
+TM.pendingDelveExit = false
+function TM.StartDelveExitPoll(remaining)
+  remaining = remaining or 60
+  if remaining <= 0 or not TM.pendingDelveExit then
+    TM.DebugPrint("StartDelveExitPoll: arrêt (remaining=" .. tostring(remaining) ..
+      " pending=" .. tostring(TM.pendingDelveExit) .. ")")
+    return
+  end
+  for i = 1, 4 do
+    local p = _G["StaticPopup" .. i]
+    if p and p:IsShown() then
+      TM.DebugPrint("StartDelveExitPoll: StaticPopup" .. i .. " trouvé -> ConfirmDelveExit")
+      TM.pendingDelveExit = false
+      TM.ConfirmDelveExit()
+      return
+    end
+  end
+  C_Timer.After(0.5, function() TM.StartDelveExitPoll(remaining - 1) end)
+end
+
+-- Polling : vérifie toutes les 0.5s si un dialog d'instance est apparu.
+-- Utilisé côté membre quand INSTENTER reçu avant que la popup n'apparaisse.
+function TM.StartInstanceAcceptPoll(remaining)
+  remaining = remaining or 60
+  if remaining <= 0 or not TM.pendingInstanceAccept then
+    TM.DebugPrint("StartInstanceAcceptPoll: arrêt (remaining=" .. tostring(remaining) ..
+      " pending=" .. tostring(TM.pendingInstanceAccept) .. ")")
+    return
+  end
+  -- LFGDungeonReadyDialog (proposals LFG / Delves)
+  local dlg = _G["LFGDungeonReadyDialog"]
+  if dlg and dlg:IsShown() then
+    TM.Print("[DIAG3] Poll: LFGDungeonReadyDialog shown")
+    -- Diagnostic condensé (1 TM.Print par catégorie = pas de throttle chat)
+    if remaining == 60 then
+      -- 1. Enfants directs UIParent + ElvUIParent (tous, shown marqué *)
+      local function dumpRoot(root)
+        if not root then return end
+        local parts = {}
+        pcall(function()
+          for _, c in ipairs({root:GetChildren()}) do
+            local n = c:GetName() or "?"
+            local s = c:IsShown() and "*" or ""
+            parts[#parts+1] = n .. "[" .. c:GetObjectType() .. "]" .. s
+          end
+        end)
+        TM.Print("[DIAG3]", (root:GetName() or "root") .. ":", table.concat(parts, " "))
+      end
+      dumpRoot(UIParent)
+      dumpRoot(_G["ElvUIParent"])
+
+      -- 2. Arbre LFGDungeonReadyDialog récursif, batché par 4
+      local lfgOut = {}
+      local function scanRec(f, depth)
+        if depth > 8 then return end
+        local ok, kids = pcall(function() return {f:GetChildren()} end)
+        if not ok then return end
+        for _, c in ipairs(kids) do
+          local n = c:GetName() or "?"
+          local s = c:IsShown() and "S" or "h"
+          local e = (c.IsEnabled and c:IsEnabled()) and "E" or ""
+          lfgOut[#lfgOut+1] = string.rep(".", depth) .. c:GetObjectType() .. " " .. n .. " " .. s .. e
+          scanRec(c, depth + 1)
+        end
+      end
+      pcall(scanRec, dlg, 1)
+      if #lfgOut == 0 then
+        TM.Print("[DIAG3] LFGDlg: aucun enfant")
+      else
+        for i = 1, #lfgOut, 4 do
+          local batch = {}
+          for j = i, math.min(i + 3, #lfgOut) do batch[#batch+1] = lfgOut[j] end
+          TM.Print("[DIAG3] LFG|" .. table.concat(batch, " | "))
+        end
+      end
+
+      -- 3. Module LFG d'ElvUI
+      pcall(function()
+        if not _G["ElvUI"] then TM.Print("[DIAG3] ElvUI=absent"); return end
+        local E = ElvUI[1]
+        local LFG = E and E.GetModule and E:GetModule("LFG", true)
+        if not LFG then TM.Print("[DIAG3] ElvUI.LFG=absent"); return end
+        local shown = {}
+        for k, v in pairs(LFG) do
+          if type(v) == "table" and type(v.IsShown) == "function" then
+            local ok2, s = pcall(function() return v:IsShown() end)
+            if ok2 and s then
+              local fn = (v.GetName and v:GetName()) or k
+              shown[#shown+1] = k .. "=" .. fn
+            end
+          end
+        end
+        TM.Print("[DIAG3] ElvUI.LFG frames shown: " .. (next(shown) and table.concat(shown, " ") or "aucun"))
+      end)
+
+      -- 4. StaticPopups visibles avec leur type
+      local sps = {}
+      for i = 1, 4 do
+        local p = _G["StaticPopup" .. i]
+        if p and p:IsShown() then sps[#sps+1] = "SP" .. i .. "=" .. tostring(p.which) end
+      end
+      TM.Print("[DIAG3] StaticPopups: " .. (#sps > 0 and table.concat(sps, " ") or "aucun"))
+    end
+    TM.AcceptInstanceProposal()
+    TM.pendingInstanceAccept = false
+    -- Second poll court : StaticPopup de confirmation éventuel
+    local sub = 20
+    local function pollPopup()
+      if sub <= 0 then return end
+      sub = sub - 1
+      for i = 1, 4 do
+        local p = _G["StaticPopup" .. i]
+        if p and p:IsShown() then
+          TM.DebugPrint("Poll2: StaticPopup" .. i .. " shown -> click")
+          TM.AcceptInstanceProposal()
+          return
+        end
+      end
+      C_Timer.After(0.3, pollPopup)
+    end
+    C_Timer.After(0.3, pollPopup)
+    return
+  end
+  -- StaticPopup quelconque visible
+  for i = 1, 4 do
+    local popup = _G["StaticPopup" .. i]
+    if popup and popup:IsShown() then
+      TM.DebugPrint("Poll: StaticPopup" .. i .. " shown -> click Button1")
+      TM.AcceptInstanceProposal()
+      TM.pendingInstanceAccept = false
+      return
+    end
+  end
+  C_Timer.After(0.5, function() TM.StartInstanceAcceptPoll(remaining - 1) end)
+end
+
 function TM.NormalizeName(name)
   if not name or name == "" then return nil end
   name = name:match("^%s*(.-)%s*$")

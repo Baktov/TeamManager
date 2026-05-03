@@ -488,9 +488,32 @@ function TM.BuildUI()
   questToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
   ui.questToggle = questToggle
 
+  -- Option : valider les quêtes automatiquement (remise)
+  local validateQuestLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  validateQuestLabel:SetPoint("TOPLEFT", questLabel, "BOTTOMLEFT", 0, -24)
+  validateQuestLabel:SetText("Valider les qu\195\170tes auto")
+
+  local validateQuestToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  validateQuestToggle:SetPoint("LEFT", validateQuestLabel, "RIGHT", 6, 0)
+  validateQuestToggle:SetSize(24, 24)
+  validateQuestToggle:SetScript("OnClick", function(self)
+    TM.db.autoValidateQuest = self:GetChecked()
+  end)
+  validateQuestToggle:SetChecked(TM.db.autoValidateQuest ~= false)
+  validateQuestToggle:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("Valider les qu\195\170tes automatiquement")
+    GameTooltip:AddLine("Si le leader valide (remet) une qu\195\170te, les membres", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("qui ont le m\195\170me panneau de remise ouvert valident", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("automatiquement la m\195\170me qu\195\170te.", 0.8, 0.8, 0.8)
+    GameTooltip:Show()
+  end)
+  validateQuestToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  ui.validateQuestToggle = validateQuestToggle
+
   -- Option : sélection de dialogue PNJ automatique
   local gossipLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  gossipLabel:SetPoint("TOPLEFT", questLabel, "BOTTOMLEFT", 0, -24)
+  gossipLabel:SetPoint("TOPLEFT", validateQuestLabel, "BOTTOMLEFT", 0, -24)
   gossipLabel:SetText("S\195\169lection dialogue PNJ auto")
 
   local gossipToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")

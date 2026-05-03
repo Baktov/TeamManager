@@ -38,6 +38,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
       if ui.debugToggle then ui.debugToggle:SetChecked(TM.debugEnabled) end
       if ui.stateToggle then ui.stateToggle:SetChecked(TM.db.showStateDisplay ~= false) end
       if ui.questToggle then ui.questToggle:SetChecked(TM.db.autoAcceptQuest ~= false) end
+      if ui.validateQuestToggle then ui.validateQuestToggle:SetChecked(TM.db.autoValidateQuest ~= false) end
       if ui.gossipToggle then ui.gossipToggle:SetChecked(TM.db.autoSelectGossip ~= false) end
       if ui.cinematicToggle then ui.cinematicToggle:SetChecked(TM.db.autoSkipCinematic ~= false) end
       if ui.taxiToggle then ui.taxiToggle:SetChecked(TM.db.autoTaxi ~= false) end
@@ -48,9 +49,8 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
         if saved and TM.db and TM.db.teams and TM.db.teams[saved] then
           TM.SelectTeam(saved, false)
           TM.Print("Team restaurée pour ce personnage:", saved)
-        else
-          for nm, _ in pairs(TM.db.teams) do TM.SelectTeam(nm, false); break end
         end
+        -- Pas de fallback : un perso sans team sauvegardée ne doit pas hériter d'une team étrangère
       end
       TM.AnnouncePlayerTeam()
     end
@@ -86,6 +86,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
     if ui.debugToggle then ui.debugToggle:SetChecked(TM.debugEnabled) end
     if ui.stateToggle then ui.stateToggle:SetChecked(TM.db.showStateDisplay ~= false) end
     if ui.questToggle then ui.questToggle:SetChecked(TM.db.autoAcceptQuest ~= false) end
+    if ui.validateQuestToggle then ui.validateQuestToggle:SetChecked(TM.db.autoValidateQuest ~= false) end
     if ui.gossipToggle then ui.gossipToggle:SetChecked(TM.db.autoSelectGossip ~= false) end
     if ui.cinematicToggle then ui.cinematicToggle:SetChecked(TM.db.autoSkipCinematic ~= false) end
     if ui.taxiToggle then ui.taxiToggle:SetChecked(TM.db.autoTaxi ~= false) end
@@ -102,11 +103,8 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
     if saved and TM.db and TM.db.teams and TM.db.teams[saved] then
       TM.SelectTeam(saved, false)
       TM.Print("Team restaurée pour ce personnage:", saved)
-    else
-      if TM.db and TM.db.teams then
-        for name, _ in pairs(TM.db.teams) do TM.SelectTeam(name); break end
-      end
     end
+    -- Pas de fallback : un perso sans team sauvegardée ne doit pas hériter d'une team étrangère
     -- Initialise le binding sécurisé assist après chargement des keybindings
     if TM.RefreshAssistBinding then TM.RefreshAssistBinding() end
   end
@@ -194,6 +192,14 @@ targetFrame:SetScript("OnEvent", function(self, event)
 end)
 
 -- Auto-accepter les quêtes si le leader accepte (si option activée)
+local function _isLeader()
+  if not TM.selectedTeam then return false end
+  local t = TM.db and TM.db.teams and TM.db.teams[TM.selectedTeam]
+  if not t or not t.leader then return false end
+  local leaderShort = t.leader:match("^(.-)%-") or t.leader
+  return leaderShort == UnitName("player")
+end
+
 local questAutoFrame = CreateFrame("Frame")
 questAutoFrame:RegisterEvent("QUEST_ACCEPTED")
 questAutoFrame:SetScript("OnEvent", function(self, event, questID)
@@ -208,6 +214,46 @@ questAutoFrame:SetScript("OnEvent", function(self, event, questID)
     TM.BroadcastQuestAccept(questID or 0)
   end
 end)
+
+-- Auto-valider (remettre) les quêtes si le leader valide (si option activée)
+-- CompleteQuest() est appelé quand le leader clique "Terminer la quête" sur le panel de
+-- progression (QUEST_PROGRESS) pour avancer vers le panel de récompenses.
+do
+  local hasCompleteQuest = (CompleteQuest ~= nil)
+  local hasGetQuestReward = (GetQuestReward ~= nil)
+  -- Ce print s'affiche au chargement de l'addon : confirme que les hooks sont enregistrés
+  C_Timer.After(3, function()
+    TM.Print("[TM Events] CompleteQuest=" .. tostring(hasCompleteQuest) .. " GetQuestReward=" .. tostring(hasGetQuestReward))
+  end)
+end
+
+if CompleteQuest then
+  hooksecurefunc("CompleteQuest", function()
+    TM.Print("[TM] CompleteQuest hook: autoValidateQuest=", tostring(TM.db and TM.db.autoValidateQuest), "isLeader=", tostring(_isLeader()))
+    if not (TM.db and TM.db.autoValidateQuest ~= false) then return end
+    if not _isLeader() then return end
+    local questID = (GetQuestID and GetQuestID()) or 0
+    if TM.BroadcastQuestValidate then
+      TM.BroadcastQuestValidate(questID)
+    end
+    TM.Print("[TM] Broadcast QVALIDATE questID=", questID)
+  end)
+end
+
+-- GetQuestReward() est appelé quand le leader clique "Terminer" sur le panel de récompenses
+-- (QuestFrameRewardPanel). C'est cette API qui remet vraiment la quête.
+if GetQuestReward then
+  hooksecurefunc("GetQuestReward", function(choice)
+    TM.Print("[TM] GetQuestReward hook: autoValidateQuest=", tostring(TM.db and TM.db.autoValidateQuest), "isLeader=", tostring(_isLeader()))
+    if not (TM.db and TM.db.autoValidateQuest ~= false) then return end
+    if not _isLeader() then return end
+    local questID = (GetQuestID and GetQuestID()) or 0
+    if TM.BroadcastQuestReward then
+      TM.BroadcastQuestReward(questID, choice or 0)
+    end
+    TM.Print("[TM] Broadcast QREWARD questID=", questID, "choice=", choice)
+  end)
+end
 
 -- Sélection automatique de dialogue PNJ (gossip) si le leader clique (si option activée)
 -- On accroche C_GossipInfo.SelectOption (retail) et SelectGossipOption (classic/compat)
@@ -250,19 +296,13 @@ if SelectGossipOption then
 end
 
 -- Passer les cinématiques automatiquement si le leader passe (option activée)
-local function _isLeader()
-  if not TM.selectedTeam then return false end
-  local t = TM.db and TM.db.teams and TM.db.teams[TM.selectedTeam]
-  if not t or not t.leader then return false end
-  local leaderShort = t.leader:match("^(.-)%-") or t.leader
-  return leaderShort == UnitName("player")
+if CancelCinematic then
+  hooksecurefunc("CancelCinematic", function()
+    if not (TM.db and TM.db.autoSkipCinematic ~= false) then return end
+    if not _isLeader() then return end
+    if TM.BroadcastCinematicSkip then TM.BroadcastCinematicSkip("cinematic") end
+  end)
 end
-
-hooksecurefunc("CancelCinematic", function()
-  if not (TM.db and TM.db.autoSkipCinematic ~= false) then return end
-  if not _isLeader() then return end
-  if TM.BroadcastCinematicSkip then TM.BroadcastCinematicSkip("cinematic") end
-end)
 
 if StopMovie then
   hooksecurefunc("StopMovie", function()
@@ -273,20 +313,28 @@ if StopMovie then
 end
 
 -- Maître de vol automatique : broadcaster la destination choisie par le leader
-hooksecurefunc("TakeTaxiNode", function(nodeIndex)
-  if not (TM.db and TM.db.autoTaxi ~= false) then return end
-  if not _isLeader() then return end
-  if TM.BroadcastTaxiNode then TM.BroadcastTaxiNode(nodeIndex) end
-end)
+if TakeTaxiNode then
+  hooksecurefunc("TakeTaxiNode", function(nodeIndex)
+    if not (TM.db and TM.db.autoTaxi ~= false) then return end
+    if not _isLeader() then return end
+    if TM.BroadcastTaxiNode then TM.BroadcastTaxiNode(nodeIndex) end
+  end)
+end
 
 -- Entrée d'instance automatique : broadcaster quand le leader valide
 -- Cas 1 : proposition LFG (popup donjon prêt) — AcceptProposal
-hooksecurefunc("AcceptProposal", function()
-  TM.DebugPrint("AcceptProposal déclenché (leader=", tostring(_isLeader()), ")")
-  if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
-  if not _isLeader() then return end
-  if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("lfg") end
-end)
+-- Guarded: AcceptProposal may not exist in all TWW builds; a nil hook would Lua-error
+-- and prevent all subsequent code (including delveDetectFrame) from loading.
+if AcceptProposal then
+  hooksecurefunc("AcceptProposal", function()
+    TM.DebugPrint("AcceptProposal déclenché (leader=", tostring(_isLeader()), ")")
+    if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
+    if not _isLeader() then return end
+    if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("lfg") end
+  end)
+else
+  TM.DebugPrint("AcceptProposal absent de l'API TWW — hook LFG désactivé")
+end
 
 -- Cas 2 : portail de donjon dans le monde — ConfirmEnterInstance
 if ConfirmEnterInstance then
@@ -297,70 +345,125 @@ if ConfirmEnterInstance then
   end)
 end
 
+-- Cas 2b : entrée directe de Gouffre (Delve TWW) via C_DelvesUI.SelectDelveEntranceTier
+-- Hookée sur la table C_DelvesUI : pas de StaticPopup, pas d'event LFG.
+if C_DelvesUI and C_DelvesUI.SelectDelveEntranceTier then
+  hooksecurefunc(C_DelvesUI, "SelectDelveEntranceTier", function(tier)
+    if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
+    if not _isLeader() then return end
+    if TM.BroadcastDelveEnter then TM.BroadcastDelveEnter(tier) end
+  end)
+end
+
 -- Cas 3 : Gouffres (Delves, TWW) + popups classiques
 -- Les Delves TWW n'utilisent PAS de StaticPopup Lua — on détecte l'entrée
 -- via PLAYER_ENTERING_WORLD côté leader, et LFG_PROPOSAL_SHOW côté membre.
 
--- DEBUG : log tous les StaticPopup_Show pour identification future
-hooksecurefunc("StaticPopup_Show", function(which)
-  if TM.debugEnabled then TM.DebugPrint("StaticPopup_Show:", which) end
-end)
+-- DEBUG : log tous les StaticPopup_Show pour identification future (guarded)
+if StaticPopup_Show then
+  hooksecurefunc("StaticPopup_Show", function(which)
+    if TM.debugEnabled then TM.DebugPrint("StaticPopup_Show:", which) end
+  end)
+else
+  TM.DebugPrint("StaticPopup_Show absent — hook désactivé")
+end
 
--- Fallback StaticPopup_OnClick (portails / popups classiques)
-hooksecurefunc("StaticPopup_OnClick", function(self, whichButton)
-  if whichButton ~= 1 then return end
-  if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
-  if not _isLeader() then return end
-  local which = self.which or ""
-  TM.DebugPrint("StaticPopup_OnClick which=", which)
-  if which:find("DELVE") then
-    if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("delve") end
-  elseif which:find("INSTANCE") or which:find("LOCK") then
-    if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("portal") end
-  end
-end)
+-- Fallback StaticPopup_OnClick (portails / popups classiques + sortie de Gouffre) (guarded)
+-- Logique : si le leader EST dans une instance (scénario = Gouffre TWW) → sortie.
+--           si le leader N'EST PAS dans une instance → entrée (entrée donjon/delve).
+if StaticPopup_OnClick then
+  local _lastBroadcastDelveExit = 0
+  hooksecurefunc("StaticPopup_OnClick", function(self, whichButton)
+    if whichButton ~= 1 then return end
+    if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
+    if not _isLeader() then return end
+    local which = self.which or ""
+    TM.DebugPrint("StaticPopup_OnClick which=", which)
+    local inInst, instType = IsInInstance()
+    if inInst then
+      -- Leader dans une instance → c'est une sortie de Gouffre
+      local now = GetTime()
+      if (now - _lastBroadcastDelveExit) >= 5 then
+        _lastBroadcastDelveExit = now
+        TM.DebugPrint("Sortie Gouffre (instType=", instType, "which=", which, ") -> broadcast DELVEEXIT")
+        if TM.BroadcastDelveExit then TM.BroadcastDelveExit() end
+      end
+    else
+      -- Leader hors instance → c'est une entrée
+      if which:find("DELVE") then
+        if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("delve") end
+      elseif which:find("INSTANCE") or which:find("LOCK") then
+        if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("portal") end
+      end
+    end
+  end)
+else
+  TM.DebugPrint("StaticPopup_OnClick absent — hook désactivé")
+end
 
--- Détection principale pour Delves TWW :
--- quand le leader entre dans une instance (PLAYER_ENTERING_WORLD), broadcaster.
+-- Détection d'entrée dans un Gouffre (Delve TWW) :
+-- PLAYER_ENTERING_WORLD peut ne pas fire lors des transitions Delve en TWW ;
+-- ZONE_CHANGED_NEW_AREA est plus fiable car il fire après le loading screen.
 local _lastBroadcastInstance = 0
 local delveDetectFrame = CreateFrame("Frame")
 delveDetectFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-delveDetectFrame:SetScript("OnEvent", function()
-  -- Toujours logger pour diagnostic (même si les checks échouent)
-  TM.DebugPrint("PLAYER_ENTERING_WORLD déclenché (autoEnterInstance=",
-    tostring(TM.db and TM.db.autoEnterInstance ~= false),
-    ", isLeader=", tostring(_isLeader()), ")")
+delveDetectFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+delveDetectFrame:SetScript("OnEvent", function(self, event)
+  TM.DebugPrint(event, "autoEnterInstance=", tostring(TM.db and TM.db.autoEnterInstance ~= false), "isLeader=", tostring(_isLeader()))
   if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
   if not _isLeader() then return end
-  C_Timer.After(0.3, function()
+  -- Délai 1s : laisser le serveur confirmer l'état d'instance
+  C_Timer.After(1, function()
     local inInstance, instanceType = IsInInstance()
-    TM.DebugPrint("PLAYER_ENTERING_WORLD +0.3s: inInstance=", tostring(inInstance), "type=", tostring(instanceType))
+    TM.DebugPrint("+1s: inInstance=", tostring(inInstance), "type=", tostring(instanceType))
     if not inInstance then return end
     local now = GetTime()
     if (now - _lastBroadcastInstance) < 10 then
-      TM.DebugPrint("PLAYER_ENTERING_WORLD: anti-spam actif, skip broadcast")
+      TM.DebugPrint("anti-spam actif, skip broadcast")
       return
     end
     _lastBroadcastInstance = now
-    TM.DebugPrint("PLAYER_ENTERING_WORLD: leader entré instance type=", instanceType, "-> broadcast delve")
+    TM.DebugPrint("leader entré instance type=", instanceType, "-> broadcast delve")
     if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("delve") end
   end)
 end)
 
 -- Côté membre : auto-accepter LFG_PROPOSAL_SHOW directement si autoEnterInstance activé.
--- Ne dépend PAS du flag pending — un membre en équipe accepte tout proposal d'instance.
 TM.pendingInstanceAccept = false
 local lfgAutoAcceptFrame = CreateFrame("Frame")
 lfgAutoAcceptFrame:RegisterEvent("LFG_PROPOSAL_SHOW")
 lfgAutoAcceptFrame:SetScript("OnEvent", function()
-  if not (TM.db and TM.db.autoEnterInstance ~= false) then
-    TM.DebugPrint("LFG_PROPOSAL_SHOW: autoEnterInstance désactivé, skip")
-    return
+  TM.Print("[DIAG] LFG_PROPOSAL_SHOW reçu")
+  -- Hook unique sur EnterDungeonButton pour vérifier si Click() lui parvient
+  local enterBtn = _G["LFGDungeonReadyDialogEnterDungeonButton"]
+  if enterBtn and not enterBtn._tmHooked then
+    enterBtn._tmHooked = true
+    enterBtn:HookScript("OnClick", function()
+      TM.Print("[DIAG] LFGDungeonReadyDialogEnterDungeonButton:OnClick fired!")
+    end)
+    TM.Print("[DIAG] Hook EnterDungeonButton:OnClick installé")
   end
-  if _isLeader() then
-    TM.DebugPrint("LFG_PROPOSAL_SHOW: je suis leader, pas d'auto-accept membre")
-    return
+  -- Scan récursif de tous les boutons enfants de LFGDungeonReadyDialog (profondeur 4)
+  local dlg = _G["LFGDungeonReadyDialog"]
+  if dlg and dlg:IsShown() then
+    TM.Print("[DIAG] Scan LFGDungeonReadyDialog (récursif, shown seulement):")
+    local function scanBtn(f, depth)
+      if depth > 4 then return end
+      for _, child in ipairs({f:GetChildren()}) do
+        local shown = child:IsShown()
+        local otype = child:GetObjectType()
+        if otype == "Button" or shown then
+          TM.Print("[DIAG] d=" .. depth,
+            otype, tostring(child:GetName()),
+            "shown=", tostring(shown),
+            "enabled=", tostring(child.IsEnabled and child:IsEnabled() or "?"))
+        end
+        if shown then scanBtn(child, depth + 1) end
+      end
+    end
+    scanBtn(dlg, 1)
   end
-  TM.DebugPrint("LFG_PROPOSAL_SHOW: membre -> auto-accept proposal")
-  pcall(AcceptProposal)
+  if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
+  if _isLeader() then return end
+  TM.AcceptInstanceProposal()
 end)

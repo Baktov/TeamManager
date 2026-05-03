@@ -96,6 +96,30 @@ function TM.BroadcastQuestAccept(questID)
   TM.DebugPrint("BroadcastQuestAccept questID=", questID)
 end
 
+-- Broadcast quest validation (turn-in) to group members (leader → members)
+-- questID: the WoW questID being completed/turned-in
+function TM.BroadcastQuestValidate(questID)
+  if not IsInGroup() then return end
+  local payload = "QVALIDATE|" .. (questID or 0)
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastQuestValidate questID=", questID)
+end
+
+-- Broadcast quest reward selection to group members (leader → members)
+-- questID: the WoW questID, choice: reward item index (0 = no choice reward)
+function TM.BroadcastQuestReward(questID, choice)
+  if not IsInGroup() then return end
+  local payload = "QREWARD|" .. (questID or 0) .. "|" .. (choice or 0)
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastQuestReward questID=", questID, "choice=", choice)
+end
+
 -- Broadcast gossip option selection to group members (leader → members)
 -- optionID: gossipOptionID (retail) ou index (classic)
 function TM.BroadcastGossipSelect(optionID)
@@ -144,6 +168,29 @@ function TM.BroadcastInstanceEnter(kind)
   TM.DebugPrint("BroadcastInstanceEnter kind=", kind)
 end
 
+-- Broadcast delve direct enter to group members (leader → members)
+-- tier: le tier sélectionné par le leader via C_DelvesUI.SelectDelveEntranceTier
+function TM.BroadcastDelveEnter(tier)
+  if not IsInGroup() then return end
+  local payload = "DELVEENTER|" .. (tier or 1)
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastDelveEnter tier=", tier)
+end
+
+-- Broadcast delve exit confirmation to group members (leader → members)
+function TM.BroadcastDelveExit()
+  if not IsInGroup() then return end
+  local payload = "DELVEEXIT|1"
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastDelveExit envoyé")
+end
+
 -- Trigger XP broadcast on relevant events
 local xpSyncFrame = CreateFrame("Frame")
 xpSyncFrame:RegisterEvent("PLAYER_XP_UPDATE")
@@ -152,20 +199,129 @@ xpSyncFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
 xpSyncFrame:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED")
 xpSyncFrame:SetScript("OnEvent", function(self, event)
   TM.BroadcastXPSync()
-  -- Quand le groupe change, le leader re-diffuse l'invite de team
-  -- pour que les membres qui viennent de rejoindre la reçoivent.
-  if event == "GROUP_ROSTER_UPDATE" and TM.pendingInviteTeam then
-    local pendingTeam = TM.pendingInviteTeam
-    local t = TM.db.teams[pendingTeam]
-    if t and t.leader then
-      local leaderShort = t.leader:match("^(.-)%-") or t.leader
-      if leaderShort == UnitName("player") and IsInGroup() then
-        C_Timer.After(0.5, function()
-          TM.BroadcastTeamInvite(pendingTeam)
-          TM.DebugPrint("GROUP_ROSTER_UPDATE: re-broadcast TEAM_INVITE pour", pendingTeam)
+  if event == "GROUP_ROSTER_UPDATE" and IsInGroup() then
+    -- Le leader re-diffuse les données de sa team sélectionnée pour mettre à jour
+    -- tous les persos groupés (y compris les nouveaux membres qui viennent de rejoindre).
+    local teamToBroadcast = TM.selectedTeam
+    if teamToBroadcast and TM.db and TM.db.teams then
+      local t = TM.db.teams[teamToBroadcast]
+      if t and t.leader then
+        local leaderShort = t.leader:match("^(.-)%-") or t.leader
+        if leaderShort == UnitName("player") then
+          C_Timer.After(0.5, function()
+            TM.BroadcastTeamSync(teamToBroadcast)
+            TM.DebugPrint("GROUP_ROSTER_UPDATE: sync team ->", teamToBroadcast)
+          end)
+        end
+      end
+    end
+    -- Re-diffuse aussi l'invite de team si une invite est en attente
+    if TM.pendingInviteTeam then
+      local pendingTeam = TM.pendingInviteTeam
+      local t = TM.db.teams[pendingTeam]
+      if t and t.leader then
+        local leaderShort = t.leader:match("^(.-)%-") or t.leader
+        if leaderShort == UnitName("player") then
+          C_Timer.After(0.5, function()
+            TM.BroadcastTeamInvite(pendingTeam)
+            TM.DebugPrint("GROUP_ROSTER_UPDATE: re-broadcast TEAM_INVITE pour", pendingTeam)
+          end)
+        end
+      end
+    end
+  end
+end)
+
+-- ─── Handlers événements quête côté membre ────────────────────────────────
+-- QUEST_DETAIL          → mémorise questID offert ; si QACCEPT pending → RequestLoadQuestByID
+-- QUEST_DATA_LOAD_RESULT → si questID correspond au pending QACCEPT → AcceptQuest()
+-- QUEST_PROGRESS        → mémorise questID de progression ; si QVALIDATE pending → CompleteQuest()
+-- QUEST_COMPLETE        → si QREWARD pending correspond → GetQuestReward(choice)
+-- Chaque message peut arriver AVANT ou APRÈS l'event WoW côté membre ; les deux sens sont couverts.
+local questDetailAutoFrame = CreateFrame("Frame")
+questDetailAutoFrame:RegisterEvent("QUEST_DETAIL")
+questDetailAutoFrame:RegisterEvent("QUEST_DATA_LOAD_RESULT")
+questDetailAutoFrame:RegisterEvent("QUEST_PROGRESS")
+questDetailAutoFrame:RegisterEvent("QUEST_COMPLETE")
+questDetailAutoFrame:RegisterEvent("QUEST_FINISHED")
+questDetailAutoFrame:SetScript("OnEvent", function(self, event, arg1)
+
+  -- ── QUEST_DETAIL : quête proposée ──────────────────────────────────────
+  if event == "QUEST_DETAIL" then
+    local questID = GetQuestID and GetQuestID() or 0
+    if questID == 0 then return end
+    TM.pendingQuestDetailID = questID
+    if TM.pendingAutoAcceptQuestID and
+       (TM.pendingAutoAcceptQuestID == 0 or TM.pendingAutoAcceptQuestID == questID) then
+      if not (TM.db and TM.db.autoAcceptQuest ~= false) then
+        TM.pendingAutoAcceptQuestID = nil
+        return
+      end
+      TM.pendingAutoAcceptQuestID = questID
+      if C_QuestLog and C_QuestLog.RequestLoadQuestByID then
+        C_QuestLog.RequestLoadQuestByID(questID)
+        TM.DebugPrint("Auto-accept quête: RequestLoadQuestByID (QUEST_DETAIL+pending) questID=", questID)
+      else
+        C_Timer.After(0, function() AcceptQuest() end)
+        TM.pendingAutoAcceptQuestID = nil
+        TM.DebugPrint("Auto-accept quête (fallback direct) questID=", questID)
+      end
+    end
+
+  -- ── QUEST_DATA_LOAD_RESULT : données de quête chargées → accepter ──────
+  elseif event == "QUEST_DATA_LOAD_RESULT" then
+    local questID = arg1
+    if questID and TM.pendingAutoAcceptQuestID == questID then
+      TM.pendingAutoAcceptQuestID = nil
+      if not (TM.db and TM.db.autoAcceptQuest ~= false) then return end
+      AcceptQuest()
+      if QuestFrame and QuestFrame:IsShown() then QuestFrame:Hide() end
+      TM.DebugPrint("Auto-accept quête depuis leader (QUEST_DATA_LOAD_RESULT) questID=", questID)
+    end
+
+  -- ── QUEST_PROGRESS : fenêtre de progression prête → CompleteQuest si pending
+  elseif event == "QUEST_PROGRESS" then
+    local questID = GetQuestID and GetQuestID() or 0
+    if questID == 0 then return end
+    TM.pendingQuestProgressID = questID
+    if TM.pendingAutoValidateQuestID and
+       (TM.pendingAutoValidateQuestID == 0 or TM.pendingAutoValidateQuestID == questID) then
+      if not (TM.db and TM.db.autoValidateQuest ~= false) then
+        TM.pendingAutoValidateQuestID = nil
+        return
+      end
+      TM.pendingAutoValidateQuestID = nil
+      C_Timer.After(0, function()
+        if IsQuestCompletable() then
+          CompleteQuest()
+          TM.Print("[TM] Auto-CompleteQuest (QUEST_PROGRESS+pending) questID=", questID)
+        else
+          TM.DebugPrint("Auto-CompleteQuest: quête non completable questID=", questID)
+        end
+      end)
+    end
+
+  -- ── QUEST_COMPLETE : panel récompenses prêt → GetQuestReward si pending ─
+  elseif event == "QUEST_COMPLETE" then
+    if TM.pendingAutoRewardQuestID then
+      local questID  = TM.pendingAutoRewardQuestID
+      local choice   = TM.pendingAutoRewardChoice or 0
+      local localID  = GetQuestID and GetQuestID() or 0
+      if questID == 0 or localID == questID then
+        TM.pendingAutoRewardQuestID = nil
+        TM.pendingAutoRewardChoice  = nil
+        if not (TM.db and TM.db.autoValidateQuest ~= false) then return end
+        C_Timer.After(0, function()
+          GetQuestReward(choice)
+          TM.Print("[TM] Auto-GetQuestReward (QUEST_COMPLETE+pending) questID=", questID, "choice=", choice)
         end)
       end
     end
+
+  -- ── QUEST_FINISHED : fermeture de la fenêtre → nettoyer les pending ──
+  elseif event == "QUEST_FINISHED" then
+    TM.pendingQuestDetailID    = nil
+    TM.pendingQuestProgressID  = nil
   end
 end)
 
@@ -232,11 +388,100 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
   end
 
   -- Quest auto-accept: QACCEPT|questID
+  -- Le message addon peut arriver AVANT ou APRÈS QUEST_DETAIL côté membre.
+  -- On utilise C_QuestLog.RequestLoadQuestByID + QUEST_DATA_LOAD_RESULT (comme EnhanceQoL),
+  -- ce qui fonctionne même quand QuestFrameDetailPanel est déjà fermé.
   if mtype == "QACCEPT" then
     if TM.db and TM.db.autoAcceptQuest ~= false then
-      if QuestFrame and QuestFrame:IsShown() then
-        AcceptQuest()
-        TM.DebugPrint("Auto-accept qu\195\170te depuis leader")
+      local questID = tonumber(msg:match("^QACCEPT|(.+)$")) or 0
+      -- Cas 1 : QUEST_DETAIL a déjà été déclenché (le membre a ouvert le PNJ avant la validation du leader)
+      if TM.pendingQuestDetailID and (questID == 0 or TM.pendingQuestDetailID == questID) then
+        local detailID = TM.pendingQuestDetailID
+        TM.pendingAutoAcceptQuestID = detailID
+        if C_QuestLog and C_QuestLog.RequestLoadQuestByID then
+          C_QuestLog.RequestLoadQuestByID(detailID)
+          TM.DebugPrint("Auto-accept quête: RequestLoadQuestByID (QUEST_DETAIL précédent) questID=", detailID)
+        else
+          C_Timer.After(0, function() AcceptQuest() end)
+          TM.pendingAutoAcceptQuestID = nil
+          TM.DebugPrint("Auto-accept quête (fallback direct) questID=", detailID)
+        end
+      else
+        -- Cas 2 : QUEST_DETAIL n'a pas encore eu lieu → stocker et attendre
+        TM.pendingAutoAcceptQuestID = questID
+        TM.DebugPrint("Auto-accept quête en attente QUEST_DETAIL questID=", questID)
+        -- Timeout de sécurité
+        C_Timer.After(30, function()
+          if TM.pendingAutoAcceptQuestID == questID then
+            TM.pendingAutoAcceptQuestID = nil
+            TM.DebugPrint("Auto-accept quête: timeout questID=", questID)
+          end
+        end)
+      end
+    end
+    return
+  end
+
+  -- Quest validate step 1: QVALIDATE|questID
+  -- Le QVALIDATE peut arriver avant ou après QUEST_PROGRESS côté membre.
+  if mtype == "QVALIDATE" then
+    TM.DebugPrint("QVALIDATE reçu: autoValidateQuest=", tostring(TM.db and TM.db.autoValidateQuest), "pendingProgressID=", tostring(TM.pendingQuestProgressID))
+    if TM.db and TM.db.autoValidateQuest ~= false then
+      local questID = tonumber(msg:match("^QVALIDATE|(.+)$")) or 0
+      -- Cas 1 : QUEST_PROGRESS a déjà eu lieu (panel de progression actif)
+      if TM.pendingQuestProgressID and (questID == 0 or TM.pendingQuestProgressID == questID) then
+        TM.pendingAutoValidateQuestID = nil
+        local resolvedID = TM.pendingQuestProgressID
+        C_Timer.After(0, function()
+          if IsQuestCompletable() then
+            CompleteQuest()
+            TM.Print("[TM] Auto-CompleteQuest questID=", resolvedID)
+          else
+            TM.DebugPrint("Auto-CompleteQuest: quête non completable questID=", resolvedID)
+          end
+        end)
+      else
+        -- Cas 2 : QUEST_PROGRESS pas encore déclenché → stocker et attendre
+        TM.pendingAutoValidateQuestID = questID
+        TM.DebugPrint("Auto-CompleteQuest en attente QUEST_PROGRESS questID=", questID)
+        C_Timer.After(30, function()
+          if TM.pendingAutoValidateQuestID == questID then
+            TM.pendingAutoValidateQuestID = nil
+            TM.DebugPrint("Auto-CompleteQuest: timeout questID=", questID)
+          end
+        end)
+      end
+    end
+    return
+  end
+
+  -- Quest validate step 2: QREWARD|questID|choice
+  -- Le QREWARD peut arriver avant que QUEST_COMPLETE soit traité côté membre.
+  if mtype == "QREWARD" then
+    TM.DebugPrint("QREWARD reçu: autoValidateQuest=", tostring(TM.db and TM.db.autoValidateQuest), "RewardPanel=", tostring(QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()))
+    if TM.db and TM.db.autoValidateQuest ~= false then
+      local parts = {}
+      for p in (msg .. "|"):gmatch("(.-)|" ) do parts[#parts + 1] = p end
+      local questID = tonumber(parts[2]) or 0
+      local choice  = tonumber(parts[3]) or 0
+      -- Cas 1 : QuestFrameRewardPanel déjà affiché
+      local localID = GetQuestID and GetQuestID() or 0
+      if QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()
+         and (questID == 0 or localID == questID) then
+        GetQuestReward(choice)
+        TM.Print("[TM] Auto-GetQuestReward (immédiat) questID=", questID, "choice=", choice)
+      else
+        -- Cas 2 : QUEST_COMPLETE pas encore traité → stocker et attendre
+        TM.pendingAutoRewardQuestID = questID
+        TM.pendingAutoRewardChoice  = choice
+        TM.DebugPrint("Auto-GetQuestReward en attente QUEST_COMPLETE questID=", questID)
+        C_Timer.After(30, function()
+          if TM.pendingAutoRewardQuestID == questID then
+            TM.pendingAutoRewardQuestID = nil
+            TM.pendingAutoRewardChoice  = nil
+            TM.DebugPrint("Auto-GetQuestReward: timeout questID=", questID)
+          end
+        end)
       end
     end
     return
@@ -307,7 +552,7 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
         for _, fname in ipairs({"LFGDungeonReadyPopup", "LFGDungeonReadyDialog", "LFGProposalFrame"}) do
           local fr = _G[fname]
           if fr and fr:IsShown() then
-            pcall(AcceptProposal)
+            TM.AcceptInstanceProposal()
             TM.pendingInstanceAccept = false
             TM.DebugPrint("Auto-accept LFG via", fname)
             break
@@ -333,21 +578,42 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
         if not confirmed then pcall(ConfirmEnterInstance) end
 
       elseif kind == "delve" then
-        -- Gouffre (Delve, TWW) : activer le flag pending + essai immédiat
+        -- Gouffre (Delve, TWW) : polling toutes les 0.5s jusqu'à ce que
+        -- LFGDungeonReadyDialog ou un StaticPopup soit visible (timing variable)
         TM.pendingInstanceAccept = true
         C_Timer.After(30, function() TM.pendingInstanceAccept = false end)
-        TM.DebugPrint("pendingInstanceAccept=true (delve)")
-        -- Essai immédiat si un dialog LFG est déjà ouvert
-        for _, fname in ipairs({"LFGDungeonReadyPopup", "LFGDungeonReadyDialog", "LFGProposalFrame"}) do
-          local fr = _G[fname]
-          if fr and fr:IsShown() then
-            pcall(AcceptProposal)
-            TM.pendingInstanceAccept = false
-            TM.DebugPrint("Auto-accept Delve immédiat via", fname)
-            break
-          end
-        end
+        TM.DebugPrint("INSTENTER|delve: démarrage polling accept (30s)")
+        TM.StartInstanceAcceptPoll(60)
       end
+    end
+    return
+  end
+
+  -- Delve direct enter: DELVEENTER|tier
+  -- Côté membre : si la fenêtre DelvesDifficultyPickerFrame est ouverte, valider le tier directement.
+  if mtype == "DELVEENTER" then
+    if TM.db and TM.db.autoEnterInstance ~= false then
+      local tier = tonumber(msg:match("^DELVEENTER|(.+)$")) or 1
+      if C_DelvesUI and C_DelvesUI.SelectDelveEntranceTier
+         and DelvesDifficultyPickerFrame and DelvesDifficultyPickerFrame:IsShown() then
+        C_Timer.After(0, function()
+          C_DelvesUI.SelectDelveEntranceTier(tier)
+        end)
+        TM.DebugPrint("Auto-enter delve tier=", tier, "depuis leader")
+      else
+        TM.DebugPrint("DELVEENTER reçu mais DelvesDifficultyPickerFrame fermé — skip")
+      end
+    end
+    return
+  end
+
+  -- Delve exit: DELVEEXIT|1
+  -- Côté membre : LFGTeleport(true) via SecureHandler pour quitter l'instance directement.
+  -- Pas besoin de StaticPopup ni de polling : le membre n'a pas à confirmer manuellement.
+  if mtype == "DELVEEXIT" then
+    if TM.db and TM.db.autoEnterInstance ~= false then
+      TM.DebugPrint("DELVEEXIT reçu: sortie Gouffre via SecureHandler")
+      if TM.ConfirmDelveExit then TM.ConfirmDelveExit() end
     end
     return
   end
@@ -366,13 +632,29 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
     for m in membersStr:gmatch("[^,]+") do table.insert(newMembers, m) end
     t.members = newMembers
   end
-  TM.selectedTeam = teamName
-  TM.SaveSelectedTeamForCharacter(teamName)
-  TM.Print("Team sync reçue:", teamName, "| Leader:", t.leader or "(aucun)")
+  -- N'auto-sélectionne la team que si le perso courant en est membre
+  local playerShort = UnitName("player") or ""
+  local isMember = false
+  for _, m in ipairs(t.members) do
+    local mshort = m:match("^(.-)%-") or m
+    if mshort == playerShort then isMember = true; break end
+  end
+  if isMember then
+    TM.selectedTeam = teamName
+    TM.SaveSelectedTeamForCharacter(teamName)
+  end
+  TM.DebugPrint("Team sync reçue:", teamName, "| Leader:", t.leader or "(aucun)")
   local ui = TM.ui
-  if ui and ui.frame and ui.frame:IsShown() then
+  -- Rafraîchir l'UI quelle que soit la visibilité du panneau principal
+  if ui then
     TM.RefreshTeamList()
-    TM.SelectTeam(teamName, false)
+    if isMember then
+      TM.SelectTeam(teamName, false)
+      -- Rafraîchir aussi la fenêtre flottante si elle est affichée
+      if ui.floatingMemberList and ui.floatingMemberList:IsShown() then
+        TM.RefreshFloatingMemberList()
+      end
+    end
   end
 end)
 
@@ -408,7 +690,7 @@ inviteHandshakeFrame:SetScript("OnEvent", function(self, event, prefix, msg, cha
     -- Team existe et le préfixe sync correspond → activation silencieuse
     TM.selectedTeam = teamName
     TM.SaveSelectedTeamForCharacter(teamName)
-    TM.Print("Team |cffffcc00" .. teamName .. "|r activée automatiquement (sync OK).")
+    TM.DebugPrint("Team |cffffcc00" .. teamName .. "|r activée automatiquement (sync OK).")
     local ui = TM.ui
     if ui and ui.frame and ui.frame:IsShown() then
       TM.RefreshTeamList()
