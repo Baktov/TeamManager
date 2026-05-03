@@ -118,6 +118,34 @@ Cela garantit que les logs disparaissent en production sans modifier le code.
 
 ---
 
+### Implémenter une nouvelle fonctionnalité automatisée
+Toute nouvelle fonctionnalité automatique (comportement déclenché sans action manuelle du joueur) **doit** :
+
+1. **Être contrôlée par une checkbox dans le panneau Options** (`UI_Main.lua`, colonne droite).
+   - Utiliser le pattern existant : `ui.maFonctToggle` + `TM.db.maFonctEnabled`
+   - La valeur par défaut doit être explicite (`~= false` si activé par défaut, `== true` si désactivé par défaut)
+   - La checkbox doit être restaurée dans `ADDON_LOADED` et `PLAYER_LOGIN` (`Events.lua`)
+
+   ```lua
+   -- UI_Main.lua — dans le bloc Options
+   ui.maFonctToggle = CreateCheckbox(optPanel, "Libellé affiché", ...)
+   ui.maFonctToggle:SetChecked(TM.db.maFonctEnabled ~= false)
+   ui.maFonctToggle:SetScript("OnClick", function(self)
+     TM.db.maFonctEnabled = self:GetChecked()
+   end)
+
+   -- Events.lua — dans ADDON_LOADED et PLAYER_LOGIN
+   if ui.maFonctToggle then ui.maFonctToggle:SetChecked(TM.db.maFonctEnabled ~= false) end
+
+   -- Sync.lua ou Events.lua — dans le handler
+   if not (TM.db and TM.db.maFonctEnabled ~= false) then return end
+   ```
+
+2. **Être documentée dans `README.md`**, section **Panneau Options** :
+   - Ajouter une ligne dans le tableau avec le nom exact du libellé de la checkbox, sa description et son état par défaut.
+
+---
+
 ## Anti-patterns à éviter
 
 - ❌ `print()` sans condition de debug

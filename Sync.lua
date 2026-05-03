@@ -145,15 +145,22 @@ function TM.BroadcastCinematicSkip(kind)
 end
 
 -- Broadcast taxi node selection to group members (leader → members)
--- nodeIndex: index du noeud taxi sélectionné par le leader
+-- IMPORTANT : on broadcast le NOM de la destination (et pas l'index), car l'index
+-- du noeud taxi diffère d'un personnage à l'autre selon les points de vol découverts.
+-- Chaque membre retrouve l'index local correspondant au nom reçu.
 function TM.BroadcastTaxiNode(nodeIndex)
   if not IsInGroup() then return end
-  local payload = "TAXI|" .. (nodeIndex or 0)
+  local nodeName = (nodeIndex and TaxiNodeName) and TaxiNodeName(nodeIndex) or ""
+  if nodeName == "" then
+    TM.DebugPrint("BroadcastTaxiNode : nom introuvable pour index=", nodeIndex)
+    return
+  end
+  local payload = "TAXI|" .. nodeName
   local channel = IsInRaid() and "RAID" or "PARTY"
   if C_ChatInfo and C_ChatInfo.SendAddonMessage then
     C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
   end
-  TM.DebugPrint("BroadcastTaxiNode nodeIndex=", nodeIndex)
+  TM.DebugPrint("BroadcastTaxiNode name=", nodeName, "(localIndex=", nodeIndex, ")")
 end
 
 -- Broadcast instance enter confirmation to group members (leader → members)
@@ -487,18 +494,42 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
     return
   end
 
-  -- Gossip auto-select: GOSSIP|optionID
+  -- Gossip auto-select: GOSSIP|gossipOptionID
+  -- gossipOptionID est server-stable (même valeur pour tous les joueurs face au même PNJ).
+  -- Côté receveur on convertit en orderIndex local et on appelle SelectOptionByIndex,
+  -- car c'est le chemin utilisé par l'UI Blizzard (cf. GossipOptionButtonMixin:OnClick).
   if mtype == "GOSSIP" then
     if TM.db and TM.db.autoSelectGossip ~= false then
-      local optionID = tonumber(msg:match("^GOSSIP|(.+)$"))
-      if optionID and GossipFrame and GossipFrame:IsShown() then
-        -- Retail : C_GossipInfo.SelectOption
-        if C_GossipInfo and C_GossipInfo.SelectOption then
-          C_GossipInfo.SelectOption(optionID)
-        else
-          SelectGossipOption(optionID)
+      local gossipOptionID = tonumber(msg:match("^GOSSIP|(.+)$"))
+      if gossipOptionID and GossipFrame and GossipFrame:IsShown() then
+        local handled = false
+        if C_GossipInfo and C_GossipInfo.GetOptions and C_GossipInfo.SelectOptionByIndex then
+          local opts = C_GossipInfo.GetOptions()
+          if opts then
+            for _, info in ipairs(opts) do
+              if info.gossipOptionID == gossipOptionID and info.orderIndex then
+                C_GossipInfo.SelectOptionByIndex(info.orderIndex)
+                TM.DebugPrint("Auto-select dialogue PNJ depuis leader, gossipOptionID=", gossipOptionID, "orderIndex=", info.orderIndex)
+                handled = true
+                break
+              end
+            end
+          end
         end
-        TM.DebugPrint("Auto-select dialogue PNJ depuis leader, optionID=", optionID)
+        -- Fallback retail direct : C_GossipInfo.SelectOption(gossipOptionID)
+        if not handled and C_GossipInfo and C_GossipInfo.SelectOption then
+          C_GossipInfo.SelectOption(gossipOptionID)
+          TM.DebugPrint("Auto-select dialogue PNJ (fallback SelectOption), gossipOptionID=", gossipOptionID)
+          handled = true
+        end
+        -- Fallback classic : SelectGossipOption(index)
+        if not handled and SelectGossipOption then
+          SelectGossipOption(gossipOptionID)
+          TM.DebugPrint("Auto-select dialogue PNJ (fallback classic), index=", gossipOptionID)
+        end
+        if not handled then
+          TM.DebugPrint("Auto-select dialogue PNJ : option non trouvée localement, gossipOptionID=", gossipOptionID)
+        end
       end
     end
     return
@@ -523,17 +554,33 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
     return
   end
 
-  -- Taxi auto-select: TAXI|nodeIndex
+  -- Taxi auto-select: TAXI|nodeName
+  -- On reçoit le NOM de la destination (les index sont locaux à chaque joueur,
+  -- ils dépendent des points de vol découverts). On itère NumTaxiNodes() pour
+  -- retrouver l'index local qui correspond au nom reçu.
   if mtype == "TAXI" then
     if TM.db and TM.db.autoTaxi ~= false then
-      local nodeIndex = tonumber(msg:match("^TAXI|(.+)$"))
-      if nodeIndex then
+      local nodeName = msg:match("^TAXI|(.+)$")
+      if nodeName and nodeName ~= "" then
         -- Vérifier que la carte de vol est ouverte (TaxiFrame retail/classic ou FlightMapFrame)
         local taxiOpen = (TaxiFrame and TaxiFrame:IsShown())
                       or (FlightMapFrame and FlightMapFrame:IsShown())
-        if taxiOpen then
-          TakeTaxiNode(nodeIndex)
-          TM.DebugPrint("Auto-taxi depuis leader, nodeIndex=", nodeIndex)
+        if taxiOpen and NumTaxiNodes and TaxiNodeName and TakeTaxiNode then
+          local found, foundIndex = false, nil
+          for i = 1, NumTaxiNodes() do
+            if TaxiNodeName(i) == nodeName then
+              found, foundIndex = true, i
+              break
+            end
+          end
+          if found then
+            TakeTaxiNode(foundIndex)
+            TM.DebugPrint("Auto-taxi depuis leader: ", nodeName, "(localIndex=", foundIndex, ")")
+          else
+            TM.DebugPrint("Auto-taxi : destination non découverte localement: ", nodeName)
+          end
+        else
+          TM.DebugPrint("Auto-taxi ignoré : aucune carte de vol ouverte (destination=", nodeName, ")")
         end
       end
     end

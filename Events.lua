@@ -256,42 +256,56 @@ if GetQuestReward then
 end
 
 -- Sélection automatique de dialogue PNJ (gossip) si le leader clique (si option activée)
--- On accroche C_GossipInfo.SelectOption (retail) et SelectGossipOption (classic/compat)
--- pour détecter le clic du leader et broadcaster aux membres.
+-- En retail, le clic sur une option appelle C_GossipInfo.SelectOptionByIndex(orderIndex)
+-- (cf. wow-ui-source GossipOptionButtonMixin:OnClick). On hooke donc en priorité cette
+-- fonction, on résout l'orderIndex en gossipOptionID (server-stable, cross-player) et on
+-- broadcast cet ID. C_GossipInfo.SelectOption et SelectGossipOption restent hookés pour
+-- les cas marginaux.
 local _gossipBroadcastPending = false
 
-local function _onGossipSelect(optionID)
-  if _gossipBroadcastPending then return end  -- éviter double broadcast
+local function _resolveGossipOptionID(orderIndex)
+  if not (C_GossipInfo and C_GossipInfo.GetOptions) then return nil end
+  local opts = C_GossipInfo.GetOptions()
+  if not opts then return nil end
+  -- Cas 1 : opts[i].orderIndex == orderIndex (retail courant)
+  for _, info in ipairs(opts) do
+    if info.orderIndex == orderIndex then return info.gossipOptionID end
+  end
+  -- Cas 2 : fallback positionnel (classic ou table non-triée)
+  if opts[orderIndex] then return opts[orderIndex].gossipOptionID end
+  return nil
+end
+
+local function _onGossipBroadcast(gossipOptionID)
+  if _gossipBroadcastPending then return end
+  if not gossipOptionID then return end
   if not (TM.db and TM.db.autoSelectGossip ~= false) then return end
-  local teamName = TM.selectedTeam
-  if not teamName then return end
-  local t = TM.db.teams and TM.db.teams[teamName]
-  if not t or not t.leader then return end
-  local leaderShort = t.leader:match("^(.-)%-") or t.leader
-  if leaderShort ~= UnitName("player") then return end
+  if not _isLeader() then return end
   _gossipBroadcastPending = true
-  if TM.BroadcastGossipSelect then TM.BroadcastGossipSelect(optionID) end
+  if TM.BroadcastGossipSelect then TM.BroadcastGossipSelect(gossipOptionID) end
   _gossipBroadcastPending = false
 end
 
--- Hook retail (C_GossipInfo.SelectOption)
-if C_GossipInfo and C_GossipInfo.SelectOption then
-  hooksecurefunc(C_GossipInfo, "SelectOption", function(optionID)
-    _onGossipSelect(optionID)
+-- Hook principal retail : C_GossipInfo.SelectOptionByIndex(orderIndex)
+if C_GossipInfo and C_GossipInfo.SelectOptionByIndex then
+  hooksecurefunc(C_GossipInfo, "SelectOptionByIndex", function(orderIndex)
+    local gid = _resolveGossipOptionID(orderIndex)
+    _onGossipBroadcast(gid)
   end)
 end
 
--- Hook classic/compat (SelectGossipOption) — index converti en optionID si possible
+-- Hook secondaire : C_GossipInfo.SelectOption(gossipOptionID, ...) (appel direct)
+if C_GossipInfo and C_GossipInfo.SelectOption then
+  hooksecurefunc(C_GossipInfo, "SelectOption", function(gossipOptionID)
+    _onGossipBroadcast(gossipOptionID)
+  end)
+end
+
+-- Hook classic/compat : SelectGossipOption(index) -- 1-based dans la liste triée
 if SelectGossipOption then
   hooksecurefunc("SelectGossipOption", function(index)
-    -- En retail C_GossipInfo.SelectOption se déclenche aussi → guard via pending
-    if _gossipBroadcastPending then return end
-    local optionID = index  -- fallback : utiliser l'index comme identifiant
-    if C_GossipInfo and C_GossipInfo.GetOptions then
-      local opts = C_GossipInfo.GetOptions()
-      if opts and opts[index] then optionID = opts[index].gossipOptionID or index end
-    end
-    _onGossipSelect(optionID)
+    local gid = _resolveGossipOptionID(index) or index
+    _onGossipBroadcast(gid)
   end)
 end
 
