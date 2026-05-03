@@ -49,8 +49,12 @@ function TM.UpdateAssistButton()
   -- Utilise le token d'unité (ex: party1) pour éviter tout problème d'encodage du nom
   local unit = TM.FindUnitByName(leader)
   if unit then
-    _assistBtn:SetAttribute("macrotext", "/assist " .. unit .. "\n/startattack")
-    TM.DebugPrint("AssistButton: /assist", unit, "(", leader, ")")
+    -- /target <unit>target : cible directement la cible courante du leader, qu'elle
+    -- soit hostile (mob) ou amicale (PNJ marchand, donneur de quête...).
+    -- /assist <unit>      : fallback si le token target n'est pas valide.
+    -- /startattack        : déclenche l'auto-attack si la cible est hostile (no-op sinon).
+    _assistBtn:SetAttribute("macrotext", "/target " .. unit .. "target\n/assist " .. unit .. "\n/startattack")
+    TM.DebugPrint("AssistButton: /target", unit .. "target", "(", leader, ")")
   else
     _assistBtn:SetAttribute("macrotext", "/assist " .. leader .. "\n/startattack")
     TM.DebugPrint("AssistButton: /assist par nom (hors groupe):", leader)

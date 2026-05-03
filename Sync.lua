@@ -621,18 +621,25 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
   end
 
   -- Cinematic skip: CINESKIP|kind
+  -- Receveur : utilise les BONNES APIs Blizzard
+  --   * cinematic : StopCinematic() (CancelCinematic n'existe pas globalement)
+  --   * movie     : MovieFrame:FinishMovie() (StopMovie global n'existe pas)
   if mtype == "CINESKIP" then
     if TM.db and TM.db.autoSkipCinematic ~= false then
       local kind = msg:match("^CINESKIP|(.+)$") or "cinematic"
       if kind == "movie" then
-        if MovieFrame and MovieFrame:IsShown() and StopMovie then
-          StopMovie()
+        if MovieFrame and MovieFrame:IsShown() and MovieFrame.FinishMovie then
+          MovieFrame:FinishMovie()
           TM.DebugPrint("Auto-skip vid\195\169o depuis leader")
+        else
+          TM.DebugPrint("CINESKIP movie ignoré : MovieFrame non visible")
         end
       else
-        if CinematicFrame and CinematicFrame:IsShown() then
-          CancelCinematic()
+        if CinematicFrame and CinematicFrame:IsShown() and StopCinematic then
+          StopCinematic()
           TM.DebugPrint("Auto-skip cin\195\169matique depuis leader")
+        else
+          TM.DebugPrint("CINESKIP cinematic ignoré : CinematicFrame non visible")
         end
       end
     end

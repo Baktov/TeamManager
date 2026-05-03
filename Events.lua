@@ -376,16 +376,37 @@ if SelectGossipOption then
 end
 
 -- Passer les cinématiques automatiquement si le leader passe (option activée)
-if CancelCinematic then
-  hooksecurefunc("CancelCinematic", function()
+-- API réelles (cf. wow-ui-source/Blizzard_FrameXML/Shared/CinematicFrame.lua
+-- et Blizzard_FrameXML/MovieFrame.lua) :
+--   * Cinématique moteur : ESC → CinematicFrame_CancelCinematic() → StopCinematic()
+--     (`CancelCinematic` n'existe PAS comme API globale)
+--   * Vidéo pré-rendue   : ESC → closeDialog → MovieFrame:FinishMovie()
+--     (`StopMovie` global n'existe PAS, c'est une méthode du widget Movie)
+if StopCinematic then
+  hooksecurefunc("StopCinematic", function()
+    TM.DebugPrint("[CinematicHook] StopCinematic isLeader=", tostring(_isLeader()),
+      "autoSkipCinematic=", tostring(TM.db and TM.db.autoSkipCinematic))
+    if not (TM.db and TM.db.autoSkipCinematic ~= false) then return end
+    if not _isLeader() then return end
+    if TM.BroadcastCinematicSkip then TM.BroadcastCinematicSkip("cinematic") end
+  end)
+end
+-- Hook secondaire sur le wrapper Lua (au cas où un addon court-circuite StopCinematic)
+if CinematicFrame_CancelCinematic then
+  hooksecurefunc("CinematicFrame_CancelCinematic", function()
+    TM.DebugPrint("[CinematicHook] CinematicFrame_CancelCinematic isLeader=", tostring(_isLeader()))
     if not (TM.db and TM.db.autoSkipCinematic ~= false) then return end
     if not _isLeader() then return end
     if TM.BroadcastCinematicSkip then TM.BroadcastCinematicSkip("cinematic") end
   end)
 end
 
-if StopMovie then
-  hooksecurefunc("StopMovie", function()
+-- Vidéo pré-rendue : MovieFrame:FinishMovie() est appelé quel que soit le mode
+-- de sortie (ESC+confirm, fin naturelle, OnHide). On hooke la méthode du mixin.
+if MovieFrame and MovieFrame.FinishMovie then
+  hooksecurefunc(MovieFrame, "FinishMovie", function()
+    TM.DebugPrint("[CinematicHook] MovieFrame:FinishMovie isLeader=", tostring(_isLeader()),
+      "autoSkipCinematic=", tostring(TM.db and TM.db.autoSkipCinematic))
     if not (TM.db and TM.db.autoSkipCinematic ~= false) then return end
     if not _isLeader() then return end
     if TM.BroadcastCinematicSkip then TM.BroadcastCinematicSkip("movie") end

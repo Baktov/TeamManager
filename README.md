@@ -159,3 +159,9 @@ Le préfixe est modifiable depuis le **panneau Options** (colonne droite de la f
 
 Skinning automatique de tous les éléments : fenêtre principale, boutons, editbox, checkbox, bouton minimap, étiquette flottante et liste des membres flottante.
 
+---
+
+## Compatibilité DialogueUI
+
+TeamManager est compatible avec l'addon **DialogueUI** (Peterodox). Les fonctionnalités de synchronisation auto (acceptation/validation de quêtes, sélection de dialogue PNJ) reposent sur les APIs serveur (`C_GossipInfo.SelectOption*`, `CompleteQuest`, `GetQuestReward`, événements `QUEST_COMPLETE` / `QUEST_TURNED_IN` / `GOSSIP_SHOW`) plutôt que sur la visibilité des frames Blizzard, ce qui permet le bon fonctionnement même quand DialogueUI masque les panneaux d'origine. Une fenêtre de fraîcheur de ~10s est utilisée côté membre pour absorber les délais de propagation des messages addon.
+
