@@ -497,6 +497,7 @@ questDetailAutoFrame:SetScript("OnEvent", function(self, event, arg1)
   -- ── QUEST_DETAIL : quête proposée ──────────────────────────────────────
   if event == "QUEST_DETAIL" then
     local questID = GetQuestID and GetQuestID() or 0
+    TM.DebugPrint("[QuestEvent] QUEST_DETAIL questID=", questID, "pendingAccept=", tostring(TM.pendingAutoAcceptQuestID))
     if questID == 0 then return end
     TM.pendingQuestDetailID = questID
     if TM.pendingAutoAcceptQuestID and
@@ -530,6 +531,7 @@ questDetailAutoFrame:SetScript("OnEvent", function(self, event, arg1)
   -- ── QUEST_PROGRESS : fenêtre de progression prête → CompleteQuest si pending
   elseif event == "QUEST_PROGRESS" then
     local questID = GetQuestID and GetQuestID() or 0
+    TM.DebugPrint("[QuestEvent] QUEST_PROGRESS questID=", questID, "pendingValidate=", tostring(TM.pendingAutoValidateQuestID), "completable=", tostring(IsQuestCompletable and IsQuestCompletable()))
     if questID == 0 then return end
     TM.pendingQuestProgressID = questID
     -- Mémorise un "flag de fraîcheur" : utile si DialogueUI ferme le panel après l'event
@@ -555,6 +557,7 @@ questDetailAutoFrame:SetScript("OnEvent", function(self, event, arg1)
 
   -- ── QUEST_COMPLETE : panel récompenses prêt → GetQuestReward si pending ─
   elseif event == "QUEST_COMPLETE" then
+    TM.DebugPrint("[QuestEvent] QUEST_COMPLETE questID=", GetQuestID and GetQuestID() or 0, "pendingReward=", tostring(TM.pendingAutoRewardQuestID))
     -- Mémorise un "flag de fraîcheur" : DialogueUI cache immédiatement le QuestFrame
     -- Blizzard après cet event, donc rewardsReady redevient false. Mais le serveur
     -- accepte GetQuestReward() pendant ~10s. On enregistre questID + timestamp pour
@@ -564,6 +567,33 @@ questDetailAutoFrame:SetScript("OnEvent", function(self, event, arg1)
       TM.questCompleteReadyAt = GetTime()
       TM.questCompleteReadyID = questID
       TM.DebugPrint("QUEST_COMPLETE mémorisé questID=", questID)
+    end
+
+    -- ─── Broadcast LEADER → MEMBRES (path indépendant des hooks UI) ────
+    -- DialogueUI capture CompleteQuest/GetQuestReward en upvalue local, donc nos
+    -- hooksecurefunc("CompleteQuest") et les hooks de boutons sont bypassés.
+    -- L'event serveur QUEST_COMPLETE, lui, fire toujours quand le panel récompense
+    -- s'ouvre, peu importe l'UI utilisée. On l'utilise comme trigger fiable pour
+    -- broadcaster QVALIDATE aux membres. Anti-doublon via TM._lastQValidateBroadcast.
+    -- Côté membre, ce même event fire aussi quand il appelle CompleteQuest en réaction
+    -- au QVALIDATE reçu — on évite le re-broadcast en filtrant : seul le leader broadcast.
+    if questID > 0 and TM.selectedTeam then
+      local team = TM.db and TM.db.teams and TM.db.teams[TM.selectedTeam]
+      if team and team.leader then
+        local leaderShort = team.leader:match("^(.-)%-") or team.leader
+        local me = UnitName("player")
+        if leaderShort == me and TM.db and TM.db.autoValidateQuest ~= false then
+          TM._lastQValidateBroadcast = TM._lastQValidateBroadcast or {}
+          local lastSent = TM._lastQValidateBroadcast[questID] or 0
+          if (GetTime() - lastSent) > 5 then
+            TM._lastQValidateBroadcast[questID] = GetTime()
+            if TM.BroadcastQuestValidate then TM.BroadcastQuestValidate(questID) end
+            TM.DebugPrint("Broadcast QVALIDATE (QUEST_COMPLETE event) questID=", questID)
+          else
+            TM.DebugPrint("QVALIDATE déjà broadcasté récemment pour questID=", questID, "skip")
+          end
+        end
+      end
     end
     if TM.pendingAutoRewardQuestID then
       local pQuestID = TM.pendingAutoRewardQuestID
@@ -582,8 +612,11 @@ questDetailAutoFrame:SetScript("OnEvent", function(self, event, arg1)
 
   -- ── QUEST_FINISHED : fermeture de la fenêtre → nettoyer les pending ──
   elseif event == "QUEST_FINISHED" then
+    TM.DebugPrint("[QuestEvent] QUEST_FINISHED")
     TM.pendingQuestDetailID    = nil
     TM.pendingQuestProgressID  = nil
+
+  -- ── QUEST_DATA_LOAD_RESULT déjà géré au-dessus, log dispo dans le handler ──
   end
 end)
 

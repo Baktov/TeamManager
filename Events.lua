@@ -203,17 +203,54 @@ end
 local questAutoFrame = CreateFrame("Frame")
 questAutoFrame:RegisterEvent("QUEST_ACCEPTED")
 questAutoFrame:SetScript("OnEvent", function(self, event, questID)
+  -- Diagnostic systématique : permet de voir quand l'event fire et pourquoi le
+  -- broadcast est éventuellement bloqué (utile car DialogueUI/Immersion peuvent
+  -- court-circuiter nos hooks AcceptQuest/QuestFrameAcceptButton ; QUEST_ACCEPTED
+  -- reste, lui, fiable car émis par le serveur).
+  TM.DebugPrint("[QUEST_ACCEPTED] questID=", tostring(questID),
+    "autoAcceptQuest=", tostring(TM.db and TM.db.autoAcceptQuest),
+    "selectedTeam=", tostring(TM.selectedTeam),
+    "isLeader=", tostring(_isLeader()),
+    "inGroup=", tostring(IsInGroup()))
   if not (TM.db and TM.db.autoAcceptQuest ~= false) then return end
-  local teamName = TM.selectedTeam
-  if not teamName then return end
-  local t = TM.db.teams and TM.db.teams[teamName]
-  if not t or not t.leader then return end
-  local leaderShort = t.leader:match("^(.-)%-") or t.leader
-  if leaderShort ~= UnitName("player") then return end
+  if not _isLeader() then return end
   if TM.BroadcastQuestAccept then
     TM.BroadcastQuestAccept(questID or 0)
   end
 end)
+
+-- Filet de sécurité : hook direct sur AcceptQuest() + clic du bouton "Continuer/Accepter".
+-- Avec DialogueUI/Immersion ou certaines quêtes campagne (page de prérequis), QUEST_ACCEPTED
+-- peut être consommé par l'UI tierce ou retardé. On broadcaste donc aussi dès l'appel à
+-- AcceptQuest, en utilisant GetQuestID() pour récupérer l'ID de la quête en cours de détail.
+local _questAcceptBroadcastPending = false
+local function _broadcastQuestAcceptOnce(reason)
+  if _questAcceptBroadcastPending then return end
+  if not (TM.db and TM.db.autoAcceptQuest ~= false) then return end
+  if not _isLeader() then return end
+  local questID = (GetQuestID and GetQuestID()) or 0
+  if questID == 0 then
+    TM.DebugPrint("[QuestAcceptHook] questID=0, skip broadcast (", reason, ")")
+    return
+  end
+  _questAcceptBroadcastPending = true
+  if TM.BroadcastQuestAccept then TM.BroadcastQuestAccept(questID) end
+  TM.DebugPrint("[QuestAcceptHook]", reason, "questID=", questID)
+  C_Timer.After(0, function() _questAcceptBroadcastPending = false end)
+end
+
+if AcceptQuest then
+  hooksecurefunc("AcceptQuest", function()
+    _broadcastQuestAcceptOnce("AcceptQuest()")
+  end)
+end
+
+-- Clic du bouton "Continuer/Accepter" du panneau de détail de quête (path UI Blizzard)
+if QuestFrameAcceptButton then
+  QuestFrameAcceptButton:HookScript("OnClick", function()
+    _broadcastQuestAcceptOnce("QuestFrameAcceptButton:OnClick")
+  end)
+end
 
 -- Auto-valider (remettre) les quêtes si le leader valide (si option activée)
 -- L'UI Blizzard appelle CompleteQuest() depuis QuestProgressCompleteButton_OnClick
