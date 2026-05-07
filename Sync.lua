@@ -866,11 +866,13 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
         end
         -- Fallback positionnel si SelectOption n'est pas dispo (ne devrait pas arriver en retail)
         if not handled and hasOpts and C_GossipInfo and C_GossipInfo.SelectOptionByIndex then
-          for arrayPos, info in ipairs(opts) do
+          for _, info in ipairs(opts) do
             if info.gossipOptionID == gossipOptionID then
-              C_GossipInfo.SelectOptionByIndex(arrayPos)
+              -- IMPORTANT : SelectOptionByIndex prend l'orderIndex, PAS la position 1-based.
+              -- Cf. Blizzard_UIPanels_Game/Shared/GossipFrameShared.lua.
+              C_GossipInfo.SelectOptionByIndex(info.orderIndex or 0)
               TM.DebugPrint("Auto-select dialogue PNJ via SelectOptionByIndex, gossipOptionID=",
-                gossipOptionID, "arrayPos=", arrayPos)
+                gossipOptionID, "orderIndex=", info.orderIndex)
               handled = true
               break
             end

@@ -364,25 +364,35 @@ end)
 local _gossipBroadcastPending = false
 
 -- Résout l'argument passé à C_GossipInfo.SelectOptionByIndex en gossipOptionID server-stable.
--- ATTENTION : l'argument de SelectOptionByIndex est un luaIndex (position 1-based dans la
--- table renvoyée par GetOptions), PAS la valeur du champ `orderIndex` (qui est la clé de tri
--- renvoyée par le serveur, souvent 0-based et parfois discontiguë).
-local function _resolveGossipOptionID(luaIndex)
+-- IMPORTANT : contrairement à ce que son nom suggère, l'argument de SelectOptionByIndex
+-- est l'`orderIndex` (clé de tri renvoyée par le serveur, souvent 0-based ou non-contiguë),
+-- PAS un luaIndex 1-based. Cf. wow-ui-source/Blizzard_UIPanels_Game/Shared/GossipFrameShared.lua
+-- (`self:SetID(optionInfo.orderIndex or 0)` puis `C_GossipInfo.SelectOptionByIndex(self:GetID())`)
+-- et DialogueUI/Code/Dialogue/UITemplates.lua (`self.id = data.orderIndex` puis
+-- `C_GossipInfo.SelectOptionByIndex(gossipButton.id)`).
+-- On cherche donc d'abord une option dont `info.orderIndex` correspond, puis on retombe
+-- sur la position 1-based en filet de sécurité.
+local function _resolveGossipOptionID(orderIndex)
   if not (C_GossipInfo and C_GossipInfo.GetOptions) then return nil end
   local opts = C_GossipInfo.GetOptions()
-  if not opts or not luaIndex then return nil end
-  -- 1) Position directe dans le tableau (cas nominal)
-  if opts[luaIndex] and opts[luaIndex].gossipOptionID then
-    return opts[luaIndex].gossipOptionID
+  if not opts or orderIndex == nil then return nil end
+  -- 1) Match par orderIndex (chemin nominal en retail et avec DialogueUI)
+  for _, info in ipairs(opts) do
+    if (info.orderIndex or -1) == orderIndex and info.gossipOptionID then
+      return info.gossipOptionID
+    end
   end
-  -- 2) Fallback : tri par orderIndex puis indexation 1-based, au cas où la table renvoyée
-  --    par GetOptions ne serait pas déjà triée par orderIndex.
+  -- 2) Fallback : position directe dans le tableau (rare, addons "exotiques")
+  if opts[orderIndex] and opts[orderIndex].gossipOptionID then
+    return opts[orderIndex].gossipOptionID
+  end
+  -- 3) Dernier filet : tri par orderIndex puis indexation 1-based
   local sorted = {}
   for _, info in ipairs(opts) do sorted[#sorted + 1] = info end
   table.sort(sorted, function(a, b)
     return (a.orderIndex or 0) < (b.orderIndex or 0)
   end)
-  if sorted[luaIndex] then return sorted[luaIndex].gossipOptionID end
+  if sorted[orderIndex] then return sorted[orderIndex].gossipOptionID end
   return nil
 end
 
