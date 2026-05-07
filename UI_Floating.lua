@@ -1,5 +1,78 @@
 -- TeamManager: UI_Floating — floating team label and member list panel
 
+-- Détecte si au moins un membre (hors leader) de la team affichée ne suit pas le leader.
+-- Sert à déclencher l'alerte « perte de follow » sur le panel flottant.
+local function _isFollowAlertActive(teamName)
+  if not teamName then return false end
+  local t = TM.db and TM.db.teams and TM.db.teams[teamName]
+  if not t or not t.leader then return false end
+  local leaderShort = t.leader:match("^(.-)%-") or t.leader
+  local cache = TM.memberStateCache or {}
+  for _, name in ipairs(t.members or {}) do
+    local short = name:match("^(.-)%-") or name
+    if short ~= leaderShort then
+      local state = cache[short]
+      if not state or state.follow ~= leaderShort then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+-- Crée (ou récupère) la texture rouge translucide superposée à un frame
+local function _ensureAlertOverlay(frame)
+  if frame.alertOverlay then return frame.alertOverlay end
+  local tex = frame:CreateTexture(nil, "ARTWORK")
+  tex:SetAllPoints(frame)
+  tex:SetColorTexture(1, 0, 0, 0.5)
+  tex:Hide()
+  frame.alertOverlay = tex
+  return tex
+end
+
+-- OnUpdate: fait clignoter l'overlay rouge tant que l'alerte est active,
+-- et le masque dès que tous les membres suivent le leader.
+local _alertAccum = 0
+local function _floatingAlertOnUpdate(self, elapsed)
+  _alertAccum = _alertAccum + (elapsed or 0)
+  if _alertAccum < 0.05 then return end
+  _alertAccum = 0
+
+  local active = _isFollowAlertActive(self.teamName)
+  local flOverlay = self.alertOverlay
+  local panel = TM.ui and TM.ui.floatingMemberList
+  local panelOverlay = panel and panel.alertOverlay
+
+  -- Option de configuration : si désactivée, on s'assure que les overlays sont masqués
+  if TM.db and TM.db.followAlert == false then
+    if flOverlay and flOverlay:IsShown() then flOverlay:Hide() end
+    if panelOverlay and panelOverlay:IsShown() then panelOverlay:Hide() end
+    return
+  end
+
+  if not active then
+    if flOverlay and flOverlay:IsShown() then flOverlay:Hide() end
+    if panelOverlay and panelOverlay:IsShown() then panelOverlay:Hide() end
+    return
+  end
+
+  -- Pulsation d'alpha entre 0.15 et 0.55 (clignotement doux)
+  local pulse = (math.sin(GetTime() * 5) + 1) * 0.5  -- 0..1
+  local alpha = 0.15 + pulse * 0.4
+
+  if flOverlay then
+    flOverlay:SetAlpha(alpha)
+    if not flOverlay:IsShown() then flOverlay:Show() end
+  end
+  if panelOverlay and panel and panel:IsShown() then
+    panelOverlay:SetAlpha(alpha)
+    if not panelOverlay:IsShown() then panelOverlay:Show() end
+  elseif panelOverlay and panelOverlay:IsShown() then
+    panelOverlay:Hide()
+  end
+end
+
 local function SaveFloatingLabelPos()
   local fl = TM.ui.floatingLabel
   if not fl then return end
@@ -87,6 +160,8 @@ function TM.CreateFloatingTeamLabel(teamName, point, relPoint, x, y)
   fl:SetWidth(math.max(60, textW + 24))
 
   TM.SkinFloatingLabel(fl)
+  _ensureAlertOverlay(fl)
+  fl:SetScript("OnUpdate", _floatingAlertOnUpdate)
   ui.floatingLabel = fl
   SaveFloatingLabelPos()
   TM.DebugPrint("Floating team label créé pour:", teamName)
@@ -131,6 +206,7 @@ function TM.RefreshFloatingMemberList()
     panel:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
     panel.rows = {}
     TM.SkinFloatingLabel(panel)
+    _ensureAlertOverlay(panel)
     ui.floatingMemberList = panel
   end
 

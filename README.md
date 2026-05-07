@@ -99,6 +99,8 @@ Une infobulle rappelle ces raccourcis au survol de chaque ligne.
 | **Passer les cinématiques auto** (checkbox) | Si le leader passe (Échap) une cinématique moteur in-game ou une vidéo pré-rendue, les membres qui regardent la même cinématique la passent automatiquement. Activé par défaut. |
 | **Vol automatique (maître de vol)** (checkbox) | Si le leader choisit une destination chez un maître de vol, les membres qui ont la même carte de vol ouverte prennent automatiquement la même destination. Activé par défaut. |
 | **Entrée instance auto (gouffre)** (checkbox) | Si le leader valide l'entrée d'un donjon (portail monde ou proposition LFG), les membres qui ont la même fenêtre de confirmation ouverte valident automatiquement. Activé par défaut. |
+| **Alerte perte de follow** (checkbox) | Si au moins un membre de la team ne suit plus le leader, le panel flottant (étiquette + liste membres si ouverte) clignote en rouge translucide. Repasse à l'apparence par défaut dès que tous les membres suivent le leader. Activé par défaut. |
+| **Monture auto (même type)** (checkbox) | Quand le leader invoque une monture, les membres invoquent au hasard une de leurs montures **favorites** dont le type correspond à celle du leader (terrestre, volante, aquatique, skyriding). Si aucune favorite ne correspond exactement, fallback automatique entre flying ↔ skyriding, puis à n'importe quelle favorite utilisable. Skip si le membre est déjà monté ou en combat. Activé par défaut. |
 
 ---
 
@@ -122,6 +124,8 @@ Panneau extensible sous l'étiquette montrant tous les membres avec :
 - Niveau et % d'XP
 - Icône de faction, race, classe
 - Nom de la spécialisation
+
+Si l'option **Alerte perte de follow** est activée (panneau Options de la fenêtre principale), l'étiquette flottante et le panel des membres se teintent d'un rouge translucide clignotant tant qu'au moins un membre ne suit pas le leader. L'effet disparaît automatiquement dès que tout le monde a repris le follow.
 
 ---
 

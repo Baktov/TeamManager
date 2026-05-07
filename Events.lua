@@ -326,16 +326,26 @@ end)
 -- les cas marginaux.
 local _gossipBroadcastPending = false
 
-local function _resolveGossipOptionID(orderIndex)
+-- Résout l'argument passé à C_GossipInfo.SelectOptionByIndex en gossipOptionID server-stable.
+-- ATTENTION : l'argument de SelectOptionByIndex est un luaIndex (position 1-based dans la
+-- table renvoyée par GetOptions), PAS la valeur du champ `orderIndex` (qui est la clé de tri
+-- renvoyée par le serveur, souvent 0-based et parfois discontiguë).
+local function _resolveGossipOptionID(luaIndex)
   if not (C_GossipInfo and C_GossipInfo.GetOptions) then return nil end
   local opts = C_GossipInfo.GetOptions()
-  if not opts then return nil end
-  -- Cas 1 : opts[i].orderIndex == orderIndex (retail courant)
-  for _, info in ipairs(opts) do
-    if info.orderIndex == orderIndex then return info.gossipOptionID end
+  if not opts or not luaIndex then return nil end
+  -- 1) Position directe dans le tableau (cas nominal)
+  if opts[luaIndex] and opts[luaIndex].gossipOptionID then
+    return opts[luaIndex].gossipOptionID
   end
-  -- Cas 2 : fallback positionnel (classic ou table non-triée)
-  if opts[orderIndex] then return opts[orderIndex].gossipOptionID end
+  -- 2) Fallback : tri par orderIndex puis indexation 1-based, au cas où la table renvoyée
+  --    par GetOptions ne serait pas déjà triée par orderIndex.
+  local sorted = {}
+  for _, info in ipairs(opts) do sorted[#sorted + 1] = info end
+  table.sort(sorted, function(a, b)
+    return (a.orderIndex or 0) < (b.orderIndex or 0)
+  end)
+  if sorted[luaIndex] then return sorted[luaIndex].gossipOptionID end
   return nil
 end
 
@@ -372,6 +382,58 @@ if SelectGossipOption then
   hooksecurefunc("SelectGossipOption", function(index)
     local gid = _resolveGossipOptionID(index) or index
     _onGossipBroadcast(gid, "SelectGossipOption(" .. tostring(index) .. ")")
+  end)
+end
+
+-- ─── Hooks "quêtes disponibles / actives" depuis un PNJ gossip ─────────────
+-- Le clic dans le GossipFrame sur une quête (icône ? jaune ou dorée) appelle
+-- C_GossipInfo.SelectAvailableQuest(questID) ou SelectActiveQuest(questID),
+-- PAS C_GossipInfo.SelectOption. Sans ces hooks, l'option "quête" du leader
+-- n'est jamais répliquée chez les membres (donc pas de QACCEPT non plus).
+local _gossipQuestBroadcastPending = false
+local function _broadcastGossipQuest(kind, questID)
+  if _gossipQuestBroadcastPending then return end
+  if not questID or questID == 0 then return end
+  if not (TM.db and TM.db.autoSelectGossip ~= false) then return end
+  if not _isLeader() then return end
+  _gossipQuestBroadcastPending = true
+  if kind == "available" and TM.BroadcastGossipQuestAvailable then
+    TM.BroadcastGossipQuestAvailable(questID)
+  elseif kind == "active" and TM.BroadcastGossipQuestActive then
+    TM.BroadcastGossipQuestActive(questID)
+  end
+  C_Timer.After(0, function() _gossipQuestBroadcastPending = false end)
+end
+
+if C_GossipInfo and C_GossipInfo.SelectAvailableQuest then
+  hooksecurefunc(C_GossipInfo, "SelectAvailableQuest", function(questID)
+    TM.DebugPrint("[GossipHook] SelectAvailableQuest questID=", tostring(questID))
+    _broadcastGossipQuest("available", questID)
+  end)
+end
+
+if C_GossipInfo and C_GossipInfo.SelectActiveQuest then
+  hooksecurefunc(C_GossipInfo, "SelectActiveQuest", function(questID)
+    TM.DebugPrint("[GossipHook] SelectActiveQuest questID=", tostring(questID))
+    _broadcastGossipQuest("active", questID)
+  end)
+end
+
+-- Legacy (classic) : SelectGossipAvailableQuest/SelectGossipActiveQuest reçoivent un index ;
+-- on résout via C_GossipInfo.GetAvailableQuests/GetActiveQuests pour obtenir le questID.
+if SelectGossipAvailableQuest and C_GossipInfo and C_GossipInfo.GetAvailableQuests then
+  hooksecurefunc("SelectGossipAvailableQuest", function(index)
+    local list = C_GossipInfo.GetAvailableQuests() or {}
+    local info = list[index]
+    if info and info.questID then _broadcastGossipQuest("available", info.questID) end
+  end)
+end
+
+if SelectGossipActiveQuest and C_GossipInfo and C_GossipInfo.GetActiveQuests then
+  hooksecurefunc("SelectGossipActiveQuest", function(index)
+    local list = C_GossipInfo.GetActiveQuests() or {}
+    local info = list[index]
+    if info and info.questID then _broadcastGossipQuest("active", info.questID) end
   end)
 end
 
@@ -567,4 +629,32 @@ lfgAutoAcceptFrame:SetScript("OnEvent", function()
   if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
   if _isLeader() then return end
   TM.AcceptInstanceProposal()
+end)
+
+-- ─── Auto-mount : leader invoque une monture → broadcast catégorie ─────
+-- On détecte tout cast de sort de monture du joueur via UNIT_SPELLCAST_SUCCEEDED,
+-- puis on résout spellID → mountID via C_MountJournal.GetMountFromSpell.
+-- Cela couvre tous les chemins (clic dans le journal, /cast, macro, mount aléatoire,
+-- raccourci par défaut Blizzard) car tous finissent en cast d'un sort de mount côté serveur.
+local _lastMountBroadcast = 0
+local mountCastFrame = CreateFrame("Frame")
+mountCastFrame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
+mountCastFrame:SetScript("OnEvent", function(self, event, unit, _, spellID)
+  if not spellID then return end
+  if not (TM.db and TM.db.autoMount ~= false) then return end
+  if not _isLeader() then return end
+  if not (C_MountJournal and C_MountJournal.GetMountFromSpell) then return end
+  local mountID = C_MountJournal.GetMountFromSpell(spellID)
+  if not mountID then return end
+  -- Anti-spam : éviter un re-broadcast si on a déjà émis pour cette monture il y a < 5s.
+  local now = GetTime()
+  if (now - _lastMountBroadcast) < 5 then
+    TM.DebugPrint("[MountHook] anti-spam, skip (mountID=", mountID, ")")
+    return
+  end
+  _lastMountBroadcast = now
+  local category = TM.GetMountCategoryFromMountID(mountID) or "ground"
+  TM.DebugPrint("[MountHook] leader cast mount spellID=", spellID,
+    "mountID=", mountID, "category=", category)
+  if TM.BroadcastMount then TM.BroadcastMount(category) end
 end)

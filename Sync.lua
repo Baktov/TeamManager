@@ -132,6 +132,35 @@ function TM.BroadcastGossipSelect(optionID)
   TM.DebugPrint("BroadcastGossipSelect optionID=", optionID)
 end
 
+-- Broadcast d'une quête DISPONIBLE choisie depuis un PNJ gossip (leader → membres)
+-- C'est le chemin de l'icône "?" jaune dans le GossipFrame :
+-- l'UI Blizzard appelle C_GossipInfo.SelectAvailableQuest(questID), ce qui déclenche
+-- ensuite QUEST_DETAIL (puis l'auto-accept standard via QACCEPT).
+function TM.BroadcastGossipQuestAvailable(questID)
+  if not IsInGroup() then return end
+  if not questID or questID == 0 then return end
+  local payload = "GOSSIPQAVAIL|" .. questID
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastGossipQuestAvailable questID=", questID)
+end
+
+-- Broadcast d'une quête ACTIVE (à rendre) choisie depuis un PNJ gossip (leader → membres)
+-- C'est le chemin de l'icône "?" dorée : C_GossipInfo.SelectActiveQuest(questID),
+-- qui ouvre QUEST_PROGRESS / QUEST_COMPLETE (le flow QVALIDATE/QREWARD prend ensuite le relais).
+function TM.BroadcastGossipQuestActive(questID)
+  if not IsInGroup() then return end
+  if not questID or questID == 0 then return end
+  local payload = "GOSSIPQACTIVE|" .. questID
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastGossipQuestActive questID=", questID)
+end
+
 -- Broadcast cinematic skip to group members (leader → members)
 -- kind: "cinematic" (moteur in-game) ou "movie" (vidéo pré-rendue)
 function TM.BroadcastCinematicSkip(kind)
@@ -143,6 +172,104 @@ function TM.BroadcastCinematicSkip(kind)
   end
   TM.DebugPrint("BroadcastCinematicSkip kind=", kind)
 end
+
+-- Applique l'auto-skip côté membre. Si la cinématique n'est pas encore
+-- affichée (latence / chargement), on arme un "pending skip" consommé par
+-- les events CINEMATIC_START / PLAY_MOVIE.
+-- allowPending : true → arme le pending si rien n'est visible
+TM._pendingCineSkip = TM._pendingCineSkip or { kind = nil, expires = 0 }
+
+local function _dismissCinematicConfirm()
+  -- Ferme la popup "Êtes-vous sûr de vouloir passer la cinématique ?"
+  -- qui peut traîner sur le membre s'il a appuyé sur ESC.
+  if StaticPopup_Hide then
+    StaticPopup_Hide("CONFIRM_STOP_CINEMATIC")
+  end
+  -- closeDialog du CinematicFrame (cas moteur) ou MovieFrame (vidéo)
+  if CinematicFrame and CinematicFrame.closeDialog and CinematicFrame.closeDialog:IsShown() then
+    CinematicFrame.closeDialog:Hide()
+  end
+  if MovieFrame and MovieFrame.CloseDialog and MovieFrame.CloseDialog:IsShown() then
+    MovieFrame.CloseDialog:Hide()
+  end
+end
+
+function TM.ApplyCinematicSkip(kind, allowPending)
+  kind = kind or "cinematic"
+  local done = false
+  if kind == "movie" then
+    if MovieFrame and MovieFrame:IsShown() and MovieFrame.FinishMovie then
+      _dismissCinematicConfirm()
+      MovieFrame:FinishMovie()
+      done = true
+      TM.DebugPrint("Auto-skip vid\195\169o (membre)")
+    end
+  else
+    if CinematicFrame and CinematicFrame:IsShown() and StopCinematic then
+      _dismissCinematicConfirm()
+      StopCinematic()
+      done = true
+      TM.DebugPrint("Auto-skip cin\195\169matique (membre)")
+    end
+  end
+  if not done and allowPending then
+    -- Cinématique pas encore affichée : on arme un pending skip de 15s.
+    TM._pendingCineSkip.kind = kind
+    TM._pendingCineSkip.expires = GetTime() + 15
+    TM.DebugPrint("CINESKIP en attente (kind=", kind, ", TTL=15s)")
+    -- Petit retry court terme pour couvrir le cas où le frame s'affiche
+    -- juste après la réception (StopCinematic peut ne pas être prêt
+    -- pendant la première frame).
+    if C_Timer and C_Timer.After then
+      for _, delay in ipairs({ 0.2, 0.5, 1.0, 2.0 }) do
+        C_Timer.After(delay, function()
+          if TM._pendingCineSkip.kind and GetTime() < TM._pendingCineSkip.expires then
+            TM.ApplyCinematicSkip(TM._pendingCineSkip.kind, false)
+          end
+        end)
+      end
+    end
+  elseif done then
+    TM._pendingCineSkip.kind = nil
+    TM._pendingCineSkip.expires = 0
+  end
+  return done
+end
+
+-- Event frame pour consommer le pending skip dès que la cinématique démarre
+local _cineSkipEventFrame = CreateFrame("Frame")
+_cineSkipEventFrame:RegisterEvent("CINEMATIC_START")
+_cineSkipEventFrame:RegisterEvent("PLAY_MOVIE")
+_cineSkipEventFrame:RegisterEvent("CINEMATIC_STOP")
+_cineSkipEventFrame:RegisterEvent("STOP_MOVIE")
+_cineSkipEventFrame:SetScript("OnEvent", function(_, event)
+  if event == "CINEMATIC_STOP" or event == "STOP_MOVIE" then
+    -- Nettoyage : si une popup de confirmation traîne, on la ferme.
+    _dismissCinematicConfirm()
+    return
+  end
+  if not (TM.db and TM.db.autoSkipCinematic ~= false) then return end
+  local pending = TM._pendingCineSkip
+  if not pending or not pending.kind then return end
+  if GetTime() > pending.expires then
+    pending.kind = nil
+    pending.expires = 0
+    return
+  end
+  -- Coercion de cohérence : l'event nous dit le vrai type qui démarre
+  local realKind = (event == "PLAY_MOVIE") and "movie" or "cinematic"
+  -- Petit délai pour laisser le frame s'afficher avant StopCinematic
+  if C_Timer and C_Timer.After then
+    C_Timer.After(0.05, function()
+      TM.ApplyCinematicSkip(realKind, false)
+    end)
+    C_Timer.After(0.3, function()
+      TM.ApplyCinematicSkip(realKind, false)
+    end)
+  else
+    TM.ApplyCinematicSkip(realKind, false)
+  end
+end)
 
 -- Broadcast taxi node selection to group members (leader → members)
 -- IMPORTANT : on broadcast le NOM de la destination (et pas l'index), car l'index
@@ -196,6 +323,104 @@ function TM.BroadcastDelveExit()
     C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
   end
   TM.DebugPrint("BroadcastDelveExit envoyé")
+end
+
+-- ─── Auto-mount : catégorisation des montures ─────────────────────────
+-- Mapping mountTypeID (renvoyé par C_MountJournal.GetMountInfoExtraByID) → catégorie
+-- logique. Les valeurs proviennent de l'API publique et de l'observation du
+-- MountJournal Blizzard. Les IDs absents tombent en "ground" par défaut.
+TM.MOUNT_TYPE_CATEGORY = {
+  -- Ground / surface
+  [230] = "ground",   -- Mount monté terrestre standard
+  [269] = "ground",   -- Water Strider (marche sur l'eau, traité comme sol)
+  [284] = "ground",   -- Chauffeured Chopper / véhicules monoplaces
+  [407] = "ground",   -- Drustridable / autres terrestres récents
+  -- Aquatique (nage en profondeur)
+  [231] = "aquatic",  -- Riding Turtle / Sea Turtle
+  [232] = "aquatic",  -- Vashj'ir Seahorse
+  [254] = "aquatic",  -- Subdued Seahorse
+  [412] = "aquatic",  -- Mounts aquatiques de surface
+  -- Volant classique (vol "à l'ancienne")
+  [247] = "flying",   -- Red Flying Cloud
+  [248] = "flying",   -- Mount volant générique
+  -- Skyriding / Dragonriding (TWW : la plupart des mounts volants modernes)
+  [402] = "skyriding",
+  [424] = "skyriding",
+  [437] = "skyriding",
+  [463] = "skyriding",
+  [464] = "skyriding",
+  [466] = "skyriding",
+}
+
+function TM.GetMountCategoryFromTypeID(mountTypeID)
+  if not mountTypeID then return "ground" end
+  return TM.MOUNT_TYPE_CATEGORY[mountTypeID] or "ground"
+end
+
+function TM.GetMountCategoryFromMountID(mountID)
+  if not mountID or not (C_MountJournal and C_MountJournal.GetMountInfoExtraByID) then
+    return nil
+  end
+  local _, _, _, _, mountTypeID = C_MountJournal.GetMountInfoExtraByID(mountID)
+  return TM.GetMountCategoryFromTypeID(mountTypeID)
+end
+
+-- Broadcast l'invocation de monture du leader. category: "ground"/"flying"/"aquatic"/"skyriding"
+function TM.BroadcastMount(category)
+  if not IsInGroup() then return end
+  if not category or category == "" then return end
+  local payload = "MOUNT|" .. category
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastMount category=", category)
+end
+
+-- Sélectionne aléatoirement une monture favorite du joueur dans la catégorie demandée.
+-- Renvoie un mountID utilisable, ou nil si rien de pertinent.
+function TM.PickFavoriteMountByCategory(category)
+  if not (C_MountJournal and C_MountJournal.GetMountIDs and C_MountJournal.GetMountInfoByID) then
+    return nil
+  end
+  local ids = C_MountJournal.GetMountIDs()
+  if not ids then return nil end
+
+  local matches, fallbackUsable = {}, {}
+  for _, mid in ipairs(ids) do
+    local name, _, _, _, isUsable, _, isFavorite, _, _, shouldHideOnChar, isCollected, mountID =
+      C_MountJournal.GetMountInfoByID(mid)
+    mountID = mountID or mid
+    if isCollected and isFavorite and isUsable and not shouldHideOnChar then
+      local cat = TM.GetMountCategoryFromMountID(mountID)
+      if cat == category then
+        matches[#matches + 1] = mountID
+      end
+      fallbackUsable[#fallbackUsable + 1] = mountID
+      -- name kept for debug only
+      if false then TM.DebugPrint("[mount] fav usable", name, cat) end
+    end
+  end
+
+  if #matches > 0 then
+    return matches[math.random(#matches)], "match"
+  end
+  -- Compatibilité skyriding ↔ flying : si aucun favori exact, accepter l'autre côté volant.
+  if category == "flying" or category == "skyriding" then
+    local altCat = (category == "flying") and "skyriding" or "flying"
+    local altMatches = {}
+    for _, mid in ipairs(fallbackUsable) do
+      if TM.GetMountCategoryFromMountID(mid) == altCat then
+        altMatches[#altMatches + 1] = mid
+      end
+    end
+    if #altMatches > 0 then return altMatches[math.random(#altMatches)], "alt-fly" end
+  end
+  -- Dernier filet : un favori utilisable quelconque.
+  if #fallbackUsable > 0 then
+    return fallbackUsable[math.random(#fallbackUsable)], "any-fav"
+  end
+  return nil, "none"
 end
 
 -- Trigger XP broadcast on relevant events
@@ -589,23 +814,36 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
         "GossipFrame:IsShown=", tostring(frameShown))
       if gossipOptionID and (hasOpts or gossipFresh or frameShown) then
         local handled = false
-        if hasOpts and C_GossipInfo and C_GossipInfo.SelectOptionByIndex then
+        -- Vérifie que l'option existe bien côté membre (PNJ identique côté serveur).
+        -- gossipOptionID est server-stable : si l'option est présente dans GetOptions(),
+        -- on peut directement déléguer à SelectOption qui est exactement ce que fait l'UI
+        -- Blizzard (cf. GossipFrameMixin:SelectGossipOption appelant
+        -- C_GossipInfo.SelectOption(optionInfo.gossipOptionID, "", false)).
+        local optionExists = false
+        if hasOpts then
           for _, info in ipairs(opts) do
-            if info.gossipOptionID == gossipOptionID and info.orderIndex then
-              C_GossipInfo.SelectOptionByIndex(info.orderIndex)
-              TM.DebugPrint("Auto-select dialogue PNJ depuis leader, gossipOptionID=", gossipOptionID, "orderIndex=", info.orderIndex)
+            if info.gossipOptionID == gossipOptionID then optionExists = true; break end
+          end
+        end
+        if (optionExists or not hasOpts) and C_GossipInfo and C_GossipInfo.SelectOption then
+          C_GossipInfo.SelectOption(gossipOptionID, "", false)
+          TM.DebugPrint("Auto-select dialogue PNJ via SelectOption, gossipOptionID=", gossipOptionID,
+            "optionExists=", tostring(optionExists))
+          handled = true
+        end
+        -- Fallback positionnel si SelectOption n'est pas dispo (ne devrait pas arriver en retail)
+        if not handled and hasOpts and C_GossipInfo and C_GossipInfo.SelectOptionByIndex then
+          for arrayPos, info in ipairs(opts) do
+            if info.gossipOptionID == gossipOptionID then
+              C_GossipInfo.SelectOptionByIndex(arrayPos)
+              TM.DebugPrint("Auto-select dialogue PNJ via SelectOptionByIndex, gossipOptionID=",
+                gossipOptionID, "arrayPos=", arrayPos)
               handled = true
               break
             end
           end
         end
-        -- Fallback retail direct : C_GossipInfo.SelectOption(gossipOptionID)
-        if not handled and C_GossipInfo and C_GossipInfo.SelectOption then
-          C_GossipInfo.SelectOption(gossipOptionID)
-          TM.DebugPrint("Auto-select dialogue PNJ (fallback SelectOption), gossipOptionID=", gossipOptionID)
-          handled = true
-        end
-        -- Fallback classic : SelectGossipOption(index)
+        -- Fallback classic : SelectGossipOption(index) — non utilisé en retail
         if not handled and SelectGossipOption then
           SelectGossipOption(gossipOptionID)
           TM.DebugPrint("Auto-select dialogue PNJ (fallback classic), index=", gossipOptionID)
@@ -620,28 +858,102 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
     return
   end
 
+  -- Gossip available quest auto-pick: GOSSIPQAVAIL|questID
+  -- Le leader a cliqué sur une "quête disponible" (icône ? jaune) dans le GossipFrame.
+  -- Côté membre on rejoue C_GossipInfo.SelectAvailableQuest(questID) qui ouvre le panneau
+  -- QUEST_DETAIL ; l'auto-accept standard (QACCEPT/QUEST_DATA_LOAD_RESULT) prend le relais.
+  if mtype == "GOSSIPQAVAIL" then
+    if TM.db and TM.db.autoSelectGossip ~= false then
+      local questID = tonumber(msg:match("^GOSSIPQAVAIL|(.+)$"))
+      local opts = (C_GossipInfo and C_GossipInfo.GetAvailableQuests) and C_GossipInfo.GetAvailableQuests() or nil
+      local hasOpts = opts and #opts > 0
+      local gossipFresh = TM.gossipReadyAt and (GetTime() - TM.gossipReadyAt < 10)
+      TM.DebugPrint("GOSSIPQAVAIL reçu questID=", questID,
+        "hasOpts=", tostring(hasOpts), "gossipFresh=", tostring(gossipFresh))
+      if questID and (hasOpts or gossipFresh) then
+        local exists = false
+        if hasOpts then
+          for _, info in ipairs(opts) do
+            if info.questID == questID then exists = true; break end
+          end
+        end
+        if (exists or not hasOpts) and C_GossipInfo and C_GossipInfo.SelectAvailableQuest then
+          C_GossipInfo.SelectAvailableQuest(questID)
+          TM.DebugPrint("Auto-pick quête disponible (gossip) questID=", questID,
+            "exists=", tostring(exists))
+        elseif SelectGossipAvailableQuest and hasOpts then
+          for i, info in ipairs(opts) do
+            if info.questID == questID then
+              SelectGossipAvailableQuest(i)
+              TM.DebugPrint("Auto-pick quête disponible (legacy index)", i)
+              break
+            end
+          end
+        else
+          TM.DebugPrint("GOSSIPQAVAIL : API SelectAvailableQuest indisponible")
+        end
+      else
+        TM.DebugPrint("GOSSIPQAVAIL ignoré : aucun gossip actif côté membre")
+      end
+    end
+    return
+  end
+
+  -- Gossip active quest auto-pick (turn-in): GOSSIPQACTIVE|questID
+  -- Le leader a cliqué sur une "quête active" (icône ? dorée). On rejoue
+  -- C_GossipInfo.SelectActiveQuest(questID) → QUEST_PROGRESS/QUEST_COMPLETE ; les
+  -- handlers QVALIDATE/QREWARD existants prennent ensuite le relais pour la remise.
+  if mtype == "GOSSIPQACTIVE" then
+    if TM.db and TM.db.autoSelectGossip ~= false then
+      local questID = tonumber(msg:match("^GOSSIPQACTIVE|(.+)$"))
+      local opts = (C_GossipInfo and C_GossipInfo.GetActiveQuests) and C_GossipInfo.GetActiveQuests() or nil
+      local hasOpts = opts and #opts > 0
+      local gossipFresh = TM.gossipReadyAt and (GetTime() - TM.gossipReadyAt < 10)
+      TM.DebugPrint("GOSSIPQACTIVE reçu questID=", questID,
+        "hasOpts=", tostring(hasOpts), "gossipFresh=", tostring(gossipFresh))
+      if questID and (hasOpts or gossipFresh) then
+        local exists = false
+        if hasOpts then
+          for _, info in ipairs(opts) do
+            if info.questID == questID then exists = true; break end
+          end
+        end
+        if (exists or not hasOpts) and C_GossipInfo and C_GossipInfo.SelectActiveQuest then
+          C_GossipInfo.SelectActiveQuest(questID)
+          TM.DebugPrint("Auto-pick quête active (gossip) questID=", questID,
+            "exists=", tostring(exists))
+        elseif SelectGossipActiveQuest and hasOpts then
+          for i, info in ipairs(opts) do
+            if info.questID == questID then
+              SelectGossipActiveQuest(i)
+              TM.DebugPrint("Auto-pick quête active (legacy index)", i)
+              break
+            end
+          end
+        else
+          TM.DebugPrint("GOSSIPQACTIVE : API SelectActiveQuest indisponible")
+        end
+      else
+        TM.DebugPrint("GOSSIPQACTIVE ignoré : aucun gossip actif côté membre")
+      end
+    end
+    return
+  end
+
   -- Cinematic skip: CINESKIP|kind
   -- Receveur : utilise les BONNES APIs Blizzard
   --   * cinematic : StopCinematic() (CancelCinematic n'existe pas globalement)
   --   * movie     : MovieFrame:FinishMovie() (StopMovie global n'existe pas)
+  -- IMPORTANT : le membre peut recevoir le CINESKIP AVANT que sa propre
+  -- cinématique ne soit affichée (latence réseau / chargement de la cin.).
+  -- Dans ce cas on arme un "pending skip" avec TTL, qui sera consommé dès que
+  -- CINEMATIC_START / PLAY_MOVIE déclenche l'affichage côté membre.
+  -- De plus, si une popup de confirmation (CONFIRM_STOP_CINEMATIC) reste
+  -- affichée côté membre, on la ferme automatiquement.
   if mtype == "CINESKIP" then
     if TM.db and TM.db.autoSkipCinematic ~= false then
       local kind = msg:match("^CINESKIP|(.+)$") or "cinematic"
-      if kind == "movie" then
-        if MovieFrame and MovieFrame:IsShown() and MovieFrame.FinishMovie then
-          MovieFrame:FinishMovie()
-          TM.DebugPrint("Auto-skip vid\195\169o depuis leader")
-        else
-          TM.DebugPrint("CINESKIP movie ignoré : MovieFrame non visible")
-        end
-      else
-        if CinematicFrame and CinematicFrame:IsShown() and StopCinematic then
-          StopCinematic()
-          TM.DebugPrint("Auto-skip cin\195\169matique depuis leader")
-        else
-          TM.DebugPrint("CINESKIP cinematic ignoré : CinematicFrame non visible")
-        end
-      end
+      TM.ApplyCinematicSkip(kind, true)
     end
     return
   end
@@ -753,6 +1065,29 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
     if TM.db and TM.db.autoEnterInstance ~= false then
       TM.DebugPrint("DELVEEXIT reçu: sortie Gouffre via SecureHandler")
       if TM.ConfirmDelveExit then TM.ConfirmDelveExit() end
+    end
+    return
+  end
+
+  -- Auto-mount : MOUNT|category
+  -- Le leader vient d'invoquer une monture de catégorie `category`. Le membre tente
+  -- d'invoquer une de ses montures favorites de la même catégorie (ou un fallback).
+  if mtype == "MOUNT" then
+    if TM.db and TM.db.autoMount ~= false then
+      local category = msg:match("^MOUNT|(.+)$") or "ground"
+      if IsMounted and IsMounted() then
+        TM.DebugPrint("MOUNT reçu mais déjà monté, skip (category=", category, ")")
+      elseif InCombatLockdown and InCombatLockdown() then
+        TM.DebugPrint("MOUNT reçu mais en combat, skip")
+      else
+        local mountID, how = TM.PickFavoriteMountByCategory(category)
+        if mountID and C_MountJournal and C_MountJournal.SummonByID then
+          C_MountJournal.SummonByID(mountID)
+          TM.DebugPrint("Auto-mount catégorie=", category, "mountID=", mountID, "(", how, ")")
+        else
+          TM.DebugPrint("Auto-mount : aucune monture favorite utilisable (category=", category, ")")
+        end
+      end
     end
     return
   end

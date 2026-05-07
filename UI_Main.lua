@@ -603,6 +603,53 @@ function TM.BuildUI()
   instanceToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
   ui.instanceToggle = instanceToggle
 
+  -- Option : alerte « perte de follow » sur le panel flottant
+  local followAlertLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  followAlertLabel:SetPoint("TOPLEFT", instanceLabel, "BOTTOMLEFT", 0, -24)
+  followAlertLabel:SetText("Alerte perte de follow")
+
+  local followAlertToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  followAlertToggle:SetPoint("LEFT", followAlertLabel, "RIGHT", 6, 0)
+  followAlertToggle:SetSize(24, 24)
+  followAlertToggle:SetScript("OnClick", function(self)
+    TM.db.followAlert = self:GetChecked()
+  end)
+  followAlertToggle:SetChecked(TM.db.followAlert ~= false)
+  followAlertToggle:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("Alerte perte de follow")
+    GameTooltip:AddLine("Si un membre ne suit plus le leader,", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("le panel flottant clignote en rouge translucide.", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("Repasse \195\160 l'apparence par d\195\169faut d\195\168s que tout le monde suit.", 0.8, 0.8, 0.8)
+    GameTooltip:Show()
+  end)
+  followAlertToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  ui.followAlertToggle = followAlertToggle
+
+  -- Option : auto-mount (les membres invoquent une monture quand le leader monte)
+  local autoMountLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  autoMountLabel:SetPoint("TOPLEFT", followAlertLabel, "BOTTOMLEFT", 0, -24)
+  autoMountLabel:SetText("Monture auto (m\195\170me type)")
+
+  local autoMountToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  autoMountToggle:SetPoint("LEFT", autoMountLabel, "RIGHT", 6, 0)
+  autoMountToggle:SetSize(24, 24)
+  autoMountToggle:SetScript("OnClick", function(self)
+    TM.db.autoMount = self:GetChecked()
+  end)
+  autoMountToggle:SetChecked(TM.db.autoMount ~= false)
+  autoMountToggle:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("Monture automatique")
+    GameTooltip:AddLine("Quand le leader invoque une monture,", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("les membres invoquent une de leurs montures favorites", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("au hasard, du m\195\170me type (terrestre, volante,", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("aquatique, skyriding).", 0.8, 0.8, 0.8)
+    GameTooltip:Show()
+  end)
+  autoMountToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  ui.autoMountToggle = autoMountToggle
+
   -- Member input row
   local inputWidth = math.max(140, rightWidth - 220)
   ui.memberInput = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
