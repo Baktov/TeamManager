@@ -396,16 +396,20 @@ local function _resolveGossipOptionID(orderIndex)
   return nil
 end
 
-local function _onGossipBroadcast(gossipOptionID, source)
-  TM.DebugPrint("[GossipHook]", source or "?", "gossipOptionID=", tostring(gossipOptionID),
+local function _onGossipBroadcast(gossipOptionID, orderIndex, source)
+  TM.DebugPrint("[GossipHook]", source or "?",
+    "gossipOptionID=", tostring(gossipOptionID),
+    "orderIndex=", tostring(orderIndex),
     "isLeader=", tostring(_isLeader()),
     "autoSelectGossip=", tostring(TM.db and TM.db.autoSelectGossip))
   if _gossipBroadcastPending then return end
-  if not gossipOptionID then return end
+  -- On accepte l'envoi tant qu'on a au moins un des deux (gossipOptionID OU orderIndex).
+  -- Cas DialogueUI hint : gossipOptionID est nil/0 mais orderIndex est valide.
+  if (not gossipOptionID or gossipOptionID == 0) and not orderIndex then return end
   if not (TM.db and TM.db.autoSelectGossip ~= false) then return end
   if not _isLeader() then return end
   _gossipBroadcastPending = true
-  if TM.BroadcastGossipSelect then TM.BroadcastGossipSelect(gossipOptionID) end
+  if TM.BroadcastGossipSelect then TM.BroadcastGossipSelect(gossipOptionID, orderIndex) end
   _gossipBroadcastPending = false
 end
 
@@ -413,22 +417,22 @@ end
 if C_GossipInfo and C_GossipInfo.SelectOptionByIndex then
   hooksecurefunc(C_GossipInfo, "SelectOptionByIndex", function(orderIndex)
     local gid = _resolveGossipOptionID(orderIndex)
-    _onGossipBroadcast(gid, "SelectOptionByIndex(" .. tostring(orderIndex) .. ")")
+    _onGossipBroadcast(gid, orderIndex, "SelectOptionByIndex(" .. tostring(orderIndex) .. ")")
   end)
 end
 
 -- Hook secondaire : C_GossipInfo.SelectOption(gossipOptionID, ...) (appel direct)
 if C_GossipInfo and C_GossipInfo.SelectOption then
   hooksecurefunc(C_GossipInfo, "SelectOption", function(gossipOptionID)
-    _onGossipBroadcast(gossipOptionID, "C_GossipInfo.SelectOption")
+    _onGossipBroadcast(gossipOptionID, nil, "C_GossipInfo.SelectOption")
   end)
 end
 
--- Hook classic/compat : SelectGossipOption(index) -- 1-based dans la liste triée
+-- Hook classic/compat : SelectGossipOption(index)
 if SelectGossipOption then
   hooksecurefunc("SelectGossipOption", function(index)
-    local gid = _resolveGossipOptionID(index) or index
-    _onGossipBroadcast(gid, "SelectGossipOption(" .. tostring(index) .. ")")
+    local gid = _resolveGossipOptionID(index)
+    _onGossipBroadcast(gid, index, "SelectGossipOption(" .. tostring(index) .. ")")
   end)
 end
 
@@ -483,6 +487,47 @@ if SelectGossipActiveQuest and C_GossipInfo and C_GossipInfo.GetActiveQuests the
     if info and info.questID then _broadcastGossipQuest("active", info.questID) end
   end)
 end
+
+-- ─── Hook fermeture DialogueUI : broadcast CLOSEUI au membre ───────────────
+-- DialogueUI ne s'expose pas dans _G ; on attache son OnHide via EnumerateFrames
+-- au PLAYER_LOGIN +5s (le frame est créé au premier GOSSIP_SHOW, mais on tente
+-- aussi à chaque GOSSIP_SHOW si pas encore trouvé).
+local _dialogueCloseHookInstalled = false
+local _lastDialogueCloseBroadcast = 0
+local function _tryHookDialogueUIClose()
+  if _dialogueCloseHookInstalled then return true end
+  if not TM.FindDialogueUIFrame then return false end
+  local f = TM.FindDialogueUIFrame()
+  if not f then return false end
+  f:HookScript("OnHide", function()
+    if not (TM.db and TM.db.autoSelectGossip ~= false) then return end
+    if not _isLeader() then return end
+    -- Anti-spam : ne broadcast qu'une fois toutes les 2s.
+    local now = GetTime()
+    if (now - _lastDialogueCloseBroadcast) < 2 then return end
+    _lastDialogueCloseBroadcast = now
+    if TM.BroadcastDialogClose then TM.BroadcastDialogClose() end
+    TM.DebugPrint("[DialogueUIHook] OnHide -> CLOSEUI broadcasté")
+  end)
+  _dialogueCloseHookInstalled = true
+  TM.DebugPrint("[DialogueUIHook] OnHide hook installé sur DialogueUI frame")
+  return true
+end
+
+-- Tentative à chargement (DialogueUI peut déjà être chargé)
+C_Timer.After(5, _tryHookDialogueUIClose)
+
+-- Tentative à chaque GOSSIP_SHOW (DialogueUI crée son frame paresseusement au
+-- premier dialogue) si pas encore installé.
+local _gossipHookProbeFrame = CreateFrame("Frame")
+_gossipHookProbeFrame:RegisterEvent("GOSSIP_SHOW")
+_gossipHookProbeFrame:RegisterEvent("QUEST_DETAIL")
+_gossipHookProbeFrame:SetScript("OnEvent", function()
+  if not _dialogueCloseHookInstalled then
+    -- Petit délai pour laisser DialogueUI Show() son frame avant le scan
+    C_Timer.After(0.1, _tryHookDialogueUIClose)
+  end
+end)
 
 -- Passer les cinématiques automatiquement si le leader passe (option activée)
 -- API réelles (cf. wow-ui-source/Blizzard_FrameXML/Shared/CinematicFrame.lua

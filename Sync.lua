@@ -120,16 +120,61 @@ function TM.BroadcastQuestReward(questID, choice)
   TM.DebugPrint("BroadcastQuestReward questID=", questID, "choice=", choice)
 end
 
--- Broadcast gossip option selection to group members (leader → members)
--- optionID: gossipOptionID (retail) ou index (classic)
-function TM.BroadcastGossipSelect(optionID)
+-- Broadcast gossip option selection to group members (leader → membres)
+-- Payload : GOSSIP|gossipOptionID|orderIndex
+--   * gossipOptionID : ID server-stable (chemin nominal)
+--   * orderIndex     : index passé à SelectOptionByIndex (fallback si gossipOptionID inconnu).
+-- Cas vu en pratique avec DialogueUI : pour certaines options de type "hint" / story,
+-- DialogueUI passe `data.orderIndex or 0` à SelectOptionByIndex, et l'option correspondante
+-- n'a pas nécessairement de gossipOptionID résolvable côté client. On broadcast donc les
+-- deux et le membre essaie SelectOption(gossipOptionID), puis SelectOptionByIndex(orderIndex).
+function TM.BroadcastGossipSelect(gossipOptionID, orderIndex)
   if not IsInGroup() then return end
-  local payload = "GOSSIP|" .. (optionID or 0)
+  -- Garde-fou : si on n'a vraiment rien, on n'envoie rien (sinon on spammerait "|0|0")
+  if (not gossipOptionID or gossipOptionID == 0) and not orderIndex then return end
+  local payload = string.format("GOSSIP|%s|%s", tostring(gossipOptionID or 0), tostring(orderIndex or ""))
   local channel = IsInRaid() and "RAID" or "PARTY"
   if C_ChatInfo and C_ChatInfo.SendAddonMessage then
     C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
   end
-  TM.DebugPrint("BroadcastGossipSelect optionID=", optionID)
+  TM.DebugPrint("BroadcastGossipSelect gossipOptionID=", gossipOptionID, "orderIndex=", orderIndex)
+end
+
+-- Broadcast "fermer le panel de dialogue/quête" (leader → membres)
+-- Cas typique : avec DialogueUI, le serveur a déjà émis GOSSIP_CLOSED mais l'UI
+-- locale du membre garde la dernière phrase du PNJ ouverte. Quand le leader ferme
+-- son DialogueUI (Esc / clic Au revoir), aucun event serveur n'est émis → on broadcast
+-- explicitement un signal CLOSEUI pour fermer le frame du membre.
+function TM.BroadcastDialogClose()
+  if not IsInGroup() then return end
+  local payload = "CLOSEUI|1"
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastDialogClose envoyé")
+end
+
+-- Recherche le frame principal de DialogueUI dans la liste des frames du jeu.
+-- DialogueUI ne s'expose pas dans _G : on identifie son frame par la signature
+-- de son mixin (méthodes uniques HideUI + AcquireAcceptButton + SetSelectedGossipIndex).
+-- Résultat caché dans TM._dialogueUIFrame (revalidé si invalide).
+function TM.FindDialogueUIFrame()
+  local cached = TM._dialogueUIFrame
+  if cached and cached.HideUI and cached.AcquireAcceptButton then
+    return cached
+  end
+  if not EnumerateFrames then return nil end
+  local f = EnumerateFrames()
+  while f do
+    -- Test cheap : trois méthodes uniques du mixin DUIDialogBaseMixin (cf. DialogueUI.lua)
+    if f.HideUI and f.AcquireAcceptButton and f.SetSelectedGossipIndex then
+      TM._dialogueUIFrame = f
+      return f
+    end
+    f = EnumerateFrames(f)
+  end
+  return nil
 end
 
 -- Broadcast d'une quête DISPONIBLE choisie depuis un PNJ gossip (leader → membres)
@@ -827,13 +872,16 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
     return
   end
 
-  -- Gossip auto-select: GOSSIP|gossipOptionID
-  -- gossipOptionID est server-stable (même valeur pour tous les joueurs face au même PNJ).
-  -- Côté receveur on convertit en orderIndex local et on appelle SelectOptionByIndex,
-  -- car c'est le chemin utilisé par l'UI Blizzard (cf. GossipOptionButtonMixin:OnClick).
+  -- Gossip auto-select: GOSSIP|gossipOptionID|orderIndex
+  -- gossipOptionID est server-stable ; orderIndex est aussi le même côté leader/membre
+  -- (même PNJ → même liste d'options côté serveur).
+  -- Côté receveur, on essaie en priorité SelectOption(gossipOptionID) ; si l'ID est 0
+  -- (cas DialogueUI sur certaines options "hint"), on tombe sur SelectOptionByIndex(orderIndex).
   if mtype == "GOSSIP" then
     if TM.db and TM.db.autoSelectGossip ~= false then
-      local gossipOptionID = tonumber(msg:match("^GOSSIP|(.+)$"))
+      local gidStr, oidStr = msg:match("^GOSSIP|([^|]*)|?(.*)$")
+      local gossipOptionID = tonumber(gidStr) or 0
+      local orderIndex = tonumber(oidStr)  -- nil si vide / ancien format
       -- Compatibilité DialogueUI / Immersion : ne pas se baser sur GossipFrame:IsShown(),
       -- mais sur la disponibilité côté serveur (C_GossipInfo.GetOptions non vide)
       -- ou sur la fenêtre de fraîcheur (10s après GOSSIP_SHOW).
@@ -841,53 +889,61 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
       local hasOpts = opts and #opts > 0
       local gossipFresh = TM.gossipReadyAt and (GetTime() - TM.gossipReadyAt < 10)
       local frameShown = GossipFrame and GossipFrame:IsShown()
-      TM.DebugPrint("GOSSIP reçu: gossipOptionID=", gossipOptionID,
+      TM.DebugPrint("GOSSIP reçu: gossipOptionID=", gossipOptionID, "orderIndex=", orderIndex,
         "hasOpts=", tostring(hasOpts),
         "gossipFresh=", tostring(gossipFresh),
         "GossipFrame:IsShown=", tostring(frameShown))
-      if gossipOptionID and (hasOpts or gossipFresh or frameShown) then
+      if (gossipOptionID > 0 or orderIndex) and (hasOpts or gossipFresh or frameShown) then
         local handled = false
-        -- Vérifie que l'option existe bien côté membre (PNJ identique côté serveur).
-        -- gossipOptionID est server-stable : si l'option est présente dans GetOptions(),
-        -- on peut directement déléguer à SelectOption qui est exactement ce que fait l'UI
-        -- Blizzard (cf. GossipFrameMixin:SelectGossipOption appelant
-        -- C_GossipInfo.SelectOption(optionInfo.gossipOptionID, "", false)).
-        local optionExists = false
-        if hasOpts then
-          for _, info in ipairs(opts) do
-            if info.gossipOptionID == gossipOptionID then optionExists = true; break end
+        -- 1) Chemin nominal : SelectOption(gossipOptionID).
+        if gossipOptionID > 0 and C_GossipInfo and C_GossipInfo.SelectOption then
+          local optionExists = false
+          if hasOpts then
+            for _, info in ipairs(opts) do
+              if info.gossipOptionID == gossipOptionID then optionExists = true; break end
+            end
+          end
+          if optionExists or not hasOpts then
+            C_GossipInfo.SelectOption(gossipOptionID, "", false)
+            TM.DebugPrint("Auto-select dialogue PNJ via SelectOption, gossipOptionID=", gossipOptionID,
+              "optionExists=", tostring(optionExists))
+            handled = true
           end
         end
-        if (optionExists or not hasOpts) and C_GossipInfo and C_GossipInfo.SelectOption then
-          C_GossipInfo.SelectOption(gossipOptionID, "", false)
-          TM.DebugPrint("Auto-select dialogue PNJ via SelectOption, gossipOptionID=", gossipOptionID,
-            "optionExists=", tostring(optionExists))
+        -- 2) Fallback DialogueUI hint : SelectOptionByIndex(orderIndex) directement.
+        --    L'orderIndex est server-stable et accepté par le serveur même quand
+        --    GetOptions() ne renvoie pas l'option correspondante côté client.
+        if not handled and orderIndex and C_GossipInfo and C_GossipInfo.SelectOptionByIndex then
+          C_GossipInfo.SelectOptionByIndex(orderIndex)
+          TM.DebugPrint("Auto-select dialogue PNJ via SelectOptionByIndex (fallback orderIndex), orderIndex=", orderIndex)
           handled = true
         end
-        -- Fallback positionnel si SelectOption n'est pas dispo (ne devrait pas arriver en retail)
-        if not handled and hasOpts and C_GossipInfo and C_GossipInfo.SelectOptionByIndex then
+        -- 3) Fallback positionnel via gossipOptionID (rare)
+        if not handled and gossipOptionID > 0 and hasOpts and C_GossipInfo and C_GossipInfo.SelectOptionByIndex then
           for _, info in ipairs(opts) do
             if info.gossipOptionID == gossipOptionID then
-              -- IMPORTANT : SelectOptionByIndex prend l'orderIndex, PAS la position 1-based.
-              -- Cf. Blizzard_UIPanels_Game/Shared/GossipFrameShared.lua.
               C_GossipInfo.SelectOptionByIndex(info.orderIndex or 0)
-              TM.DebugPrint("Auto-select dialogue PNJ via SelectOptionByIndex, gossipOptionID=",
-                gossipOptionID, "orderIndex=", info.orderIndex)
+              TM.DebugPrint("Auto-select dialogue PNJ via SelectOptionByIndex (par gossipOptionID), orderIndex=",
+                info.orderIndex)
               handled = true
               break
             end
           end
         end
-        -- Fallback classic : SelectGossipOption(index) — non utilisé en retail
+        -- 4) Fallback classic : SelectGossipOption(index)
         if not handled and SelectGossipOption then
-          SelectGossipOption(gossipOptionID)
-          TM.DebugPrint("Auto-select dialogue PNJ (fallback classic), index=", gossipOptionID)
+          local idx = orderIndex or gossipOptionID
+          SelectGossipOption(idx)
+          TM.DebugPrint("Auto-select dialogue PNJ (fallback classic), index=", idx)
+          handled = true
         end
         if not handled then
-          TM.DebugPrint("Auto-select dialogue PNJ : option non trouvée localement, gossipOptionID=", gossipOptionID)
+          TM.DebugPrint("Auto-select dialogue PNJ : aucun chemin disponible (gossipOptionID=",
+            gossipOptionID, "orderIndex=", orderIndex, ")")
         end
       else
-        TM.DebugPrint("GOSSIP ignoré : aucun gossip actif côté membre (gossipOptionID=", gossipOptionID, ")")
+        TM.DebugPrint("GOSSIP ignoré : aucun gossip actif côté membre (gossipOptionID=",
+          gossipOptionID, "orderIndex=", orderIndex, ")")
       end
     end
     return
@@ -970,6 +1026,35 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
         end
       else
         TM.DebugPrint("GOSSIPQACTIVE ignoré : aucun gossip actif côté membre")
+      end
+    end
+    return
+  end
+
+  -- Close dialog UI: CLOSEUI|1
+  -- Le leader vient de fermer son panneau de dialogue (Esc / clic Au revoir).
+  -- Le serveur a déjà émis GOSSIP_CLOSED/QUEST_FINISHED, mais des UIs comme DialogueUI
+  -- gardent leur frame visible pour afficher la dernière phrase du PNJ. On force la
+  -- fermeture côté membre via plusieurs voies (DialogueUI, Blizzard Gossip/Quest).
+  if mtype == "CLOSEUI" then
+    if TM.db and TM.db.autoSelectGossip ~= false then
+      TM.DebugPrint("CLOSEUI reçu : fermeture des panneaux de dialogue")
+      -- 1) DialogueUI : on appelle HideUI() sur son frame s'il est trouvé et visible
+      local duif = TM.FindDialogueUIFrame and TM.FindDialogueUIFrame()
+      if duif and duif:IsShown() then
+        if duif.HideUI then
+          pcall(duif.HideUI, duif)
+        else
+          pcall(duif.Hide, duif)
+        end
+        TM.DebugPrint("CLOSEUI : DialogueUI:HideUI() appelé")
+      end
+      -- 2) UI Blizzard standard (filets de sécurité)
+      if C_GossipInfo and C_GossipInfo.CloseGossip then C_GossipInfo.CloseGossip() end
+      if CloseQuest then pcall(CloseQuest) end
+      if HideUIPanel then
+        if GossipFrame and GossipFrame:IsShown() then HideUIPanel(GossipFrame) end
+        if QuestFrame and QuestFrame:IsShown() then HideUIPanel(QuestFrame) end
       end
     end
     return
