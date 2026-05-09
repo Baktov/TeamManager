@@ -347,6 +347,18 @@ function TM.BroadcastInstanceEnter(kind)
   TM.DebugPrint("BroadcastInstanceEnter kind=", kind)
 end
 
+-- Broadcast LFG role check acceptance to group members (leader → members)
+-- Déclenché quand le leader clique "Accepter" dans le popup "Confirmez votre rôle".
+function TM.BroadcastRoleCheck()
+  if not IsInGroup() then return end
+  local payload = "ROLECHECK|1"
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastRoleCheck sent")
+end
+
 -- Broadcast delve direct enter to group members (leader → members)
 -- tier: le tier sélectionné par le leader via C_DelvesUI.SelectDelveEntranceTier
 function TM.BroadcastDelveEnter(tier)
@@ -1154,51 +1166,70 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
     return
   end
 
+  -- LFG role check auto: ROLECHECK|1
+  -- Côté membre : accepter le popup « Confirmez votre rôle » quand le leader l'a accepté.
+  if mtype == "ROLECHECK" then
+    if TM.db and TM.db.autoEnterDungeon ~= false then
+      -- Cas 1 : LFG_ROLE_CHECK_SHOW a déjà eu lieu côté membre → accepter immédiatement
+      if TM._roleCheckReadyUntil and GetTime() < TM._roleCheckReadyUntil then
+        TM._roleCheckReadyUntil = nil
+        TM.AcceptRoleCheckForDungeon()
+        TM.DebugPrint("ROLECHECK reçu : acceptation immédiate (LFG_ROLE_CHECK_SHOW précédent)")
+      else
+        -- Cas 2 : attendre que LFG_ROLE_CHECK_SHOW se déclenche côté membre
+        TM.pendingRoleCheck = true
+        C_Timer.After(15, function() TM.pendingRoleCheck = false end)
+        TM.StartRoleCheckPoll(30)
+        TM.DebugPrint("ROLECHECK reçu : en attente LFG_ROLE_CHECK_SHOW membre")
+      end
+    end
+    return
+  end
+
   -- Instance enter auto: INSTENTER|kind
   if mtype == "INSTENTER" then
-    if TM.db and TM.db.autoEnterInstance ~= false then
-      local kind = msg:match("^INSTENTER|(.+)$") or "lfg"
+    local kind = msg:match("^INSTENTER|(.+)$") or "lfg"
 
-      if kind == "lfg" then
-        -- Proposition LFG — activer le flag pending ET essai immédiat
-        TM.pendingInstanceAccept = true
-        C_Timer.After(15, function() TM.pendingInstanceAccept = false end)
-        for _, fname in ipairs({"LFGDungeonReadyPopup", "LFGDungeonReadyDialog", "LFGProposalFrame"}) do
-          local fr = _G[fname]
-          if fr and fr:IsShown() then
-            TM.AcceptInstanceProposal()
-            TM.pendingInstanceAccept = false
-            TM.DebugPrint("Auto-accept LFG via", fname)
+    -- kind="lfg" : proposition LFG (groupe formé) → géré par autoEnterDungeon
+    if kind == "lfg" and TM.db and TM.db.autoEnterDungeon ~= false then
+      -- Proposition LFG — activer le flag pending ET essai immédiat
+      TM.pendingInstanceAccept = true
+      C_Timer.After(15, function() TM.pendingInstanceAccept = false end)
+      for _, fname in ipairs({"LFGDungeonReadyPopup", "LFGDungeonReadyDialog", "LFGProposalFrame"}) do
+        local fr = _G[fname]
+        if fr and fr:IsShown() then
+          TM.AcceptInstanceProposal()
+          TM.pendingInstanceAccept = false
+          TM.DebugPrint("Auto-accept LFG via", fname)
+          break
+        end
+      end
+
+    elseif kind == "portal" and TM.db and TM.db.autoEnterInstance ~= false then
+      -- Portail monde : chercher n'importe quelle popup d'entrée d'instance
+      local confirmed = false
+      for i = 1, 10 do
+        local popup = _G["StaticPopup" .. i]
+        if popup and popup:IsShown() then
+          local w = popup.which or ""
+          if w:find("INSTANCE") or w:find("ENTER") or w:find("LOCK") then
+            pcall(ConfirmEnterInstance)
+            confirmed = true
+            TM.DebugPrint("Auto-enter portail depuis leader (popup", w, ")")
             break
           end
         end
-
-      elseif kind == "portal" then
-        -- Portail monde : chercher n'importe quelle popup d'entrée d'instance
-        local confirmed = false
-        for i = 1, 10 do
-          local popup = _G["StaticPopup" .. i]
-          if popup and popup:IsShown() then
-            local w = popup.which or ""
-            if w:find("INSTANCE") or w:find("ENTER") or w:find("LOCK") then
-              pcall(ConfirmEnterInstance)
-              confirmed = true
-              TM.DebugPrint("Auto-enter portail depuis leader (popup", w, ")")
-              break
-            end
-          end
-        end
-        -- Fallback direct si aucun popup reconnu
-        if not confirmed then pcall(ConfirmEnterInstance) end
-
-      elseif kind == "delve" then
-        -- Gouffre (Delve, TWW) : polling toutes les 0.5s jusqu'à ce que
-        -- LFGDungeonReadyDialog ou un StaticPopup soit visible (timing variable)
-        TM.pendingInstanceAccept = true
-        C_Timer.After(30, function() TM.pendingInstanceAccept = false end)
-        TM.DebugPrint("INSTENTER|delve: démarrage polling accept (30s)")
-        TM.StartInstanceAcceptPoll(60)
       end
+      -- Fallback direct si aucun popup reconnu
+      if not confirmed then pcall(ConfirmEnterInstance) end
+
+    elseif kind == "delve" and TM.db and TM.db.autoEnterInstance ~= false then
+      -- Gouffre (Delve, TWW) : polling toutes les 0.5s jusqu'à ce que
+      -- LFGDungeonReadyDialog ou un StaticPopup soit visible (timing variable)
+      TM.pendingInstanceAccept = true
+      C_Timer.After(30, function() TM.pendingInstanceAccept = false end)
+      TM.DebugPrint("INSTENTER|delve: démarrage polling accept (30s)")
+      TM.StartInstanceAcceptPoll(60)
     end
     return
   end

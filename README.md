@@ -66,9 +66,9 @@ Tous configurables dans le menu des raccourcis WoW sous **Team Manager** :
 - **Redimensionnable** (min 600×340, taille sauvegardée par personnage)
 - **Déplaçable** (position sauvegardée par personnage)
 - **Mise en page 3 colonnes** :
-  - **Colonne gauche** : liste scrollable des équipes (jusqu'à 12), clic pour sélectionner
-  - **Colonne centrale** : liste des membres (jusqu'à 16) avec statut en ligne (vert) / hors ligne (rouge)
-  - **Colonne droite** : panneau Options (debug, préfixe sync)
+  - **Colonne gauche** : liste scrollable des équipes (jusqu'à **30**), clic pour sélectionner — ascenseur si nécessaire, skinné ElvUI si présent
+  - **Colonne centrale** : liste scrollable des membres (jusqu'à **40**) avec statut en ligne (vert) / hors ligne (rouge) — ascenseur si nécessaire, skinné ElvUI si présent
+  - **Colonne droite** : panneau Options (debug, préfixe sync) — ascenseur si la fenêtre est réduite, skinné ElvUI si présent
 
 ### Interactions sur les membres
 
@@ -98,7 +98,8 @@ Une infobulle rappelle ces raccourcis au survol de chaque ligne.
 | **Sélection dialogue PNJ auto** (checkbox) | Si le leader clique sur une option de dialogue PNJ (phrase, cinématique…), les membres qui ont la même bulle de dialogue ouverte sélectionnent automatiquement la même option. Activé par défaut. |
 | **Passer les cinématiques auto** (checkbox) | Si le leader passe (Échap) une cinématique moteur in-game ou une vidéo pré-rendue, les membres qui regardent la même cinématique la passent automatiquement. Activé par défaut. |
 | **Vol automatique (maître de vol)** (checkbox) | Si le leader choisit une destination chez un maître de vol, les membres qui ont la même carte de vol ouverte prennent automatiquement la même destination. Activé par défaut. |
-| **Entrée instance auto (gouffre)** (checkbox) | Si le leader valide l'entrée d'un donjon (portail monde ou proposition LFG), les membres qui ont la même fenêtre de confirmation ouverte valident automatiquement. Activé par défaut. |
+| **Entrée instance auto (gouffre)** (checkbox) | Si le leader valide l'entrée d'un donjon (portail monde ou gouffre/Delve TWW), les membres qui ont la même fenêtre de confirmation ouverte valident automatiquement. |
+| **Entrée en donjon** (checkbox) | Couvre les deux étapes de la file LFG : **(1)** quand le leader accepte le popup « Confirmez votre rôle », les membres valident également leur rôle automatiquement ; **(2)** quand le groupe est formé et que le leader clique sur « Entrer », les membres entrent dans le donjon automatiquement. Activé par défaut. |
 | **Alerte perte de follow** (checkbox) | Si au moins un membre de la team ne suit plus le leader, le panel flottant (étiquette + liste membres si ouverte) clignote en rouge translucide. Repasse à l'apparence par défaut dès que tous les membres suivent le leader. Activé par défaut. |
 | **Monture auto (même type)** (checkbox) | Quand le leader invoque une monture, les membres invoquent au hasard une de leurs montures **favorites** dont le type correspond à celle du leader (terrestre, volante, aquatique, skyriding). Si aucune favorite ne correspond exactement, fallback automatique entre flying ↔ skyriding, puis à n'importe quelle favorite utilisable. Skip si le membre est déjà monté ou en combat. Activé par défaut. |
 

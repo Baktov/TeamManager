@@ -43,6 +43,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
       if ui.cinematicToggle then ui.cinematicToggle:SetChecked(TM.db.autoSkipCinematic ~= false) end
       if ui.taxiToggle then ui.taxiToggle:SetChecked(TM.db.autoTaxi ~= false) end
       if ui.instanceToggle then ui.instanceToggle:SetChecked(TM.db.autoEnterInstance ~= false) end
+      if ui.dungeonToggle then ui.dungeonToggle:SetChecked(TM.db.autoEnterDungeon ~= false) end
       TM.RefreshTeamList()
       if not TM.selectedTeam then
         local saved = TM.LoadSelectedTeamForCharacter()
@@ -91,6 +92,7 @@ initFrame:SetScript("OnEvent", function(self, event, arg1)
     if ui.cinematicToggle then ui.cinematicToggle:SetChecked(TM.db.autoSkipCinematic ~= false) end
     if ui.taxiToggle then ui.taxiToggle:SetChecked(TM.db.autoTaxi ~= false) end
     if ui.instanceToggle then ui.instanceToggle:SetChecked(TM.db.autoEnterInstance ~= false) end
+    if ui.dungeonToggle then ui.dungeonToggle:SetChecked(TM.db.autoEnterDungeon ~= false) end
     TM.RefreshTeamList()
     -- Consume pending selection or restore from charDb
     local key = TM.GetCharacterKey()
@@ -577,18 +579,30 @@ if TakeTaxiNode then
 end
 
 -- Entrée d'instance automatique : broadcaster quand le leader valide
--- Cas 1 : proposition LFG (popup donjon prêt) — AcceptProposal
+-- Cas 1 : proposition LFG (popup donjon prêt) — AcceptProposal → géré par autoEnterDungeon
 -- Guarded: AcceptProposal may not exist in all TWW builds; a nil hook would Lua-error
 -- and prevent all subsequent code (including delveDetectFrame) from loading.
 if AcceptProposal then
   hooksecurefunc("AcceptProposal", function()
     TM.DebugPrint("AcceptProposal déclenché (leader=", tostring(_isLeader()), ")")
-    if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
+    if not (TM.db and TM.db.autoEnterDungeon ~= false) then return end
     if not _isLeader() then return end
     if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("lfg") end
   end)
 else
   TM.DebugPrint("AcceptProposal absent de l'API TWW — hook LFG désactivé")
+end
+
+-- Cas 1b : confirmation de rôle LFG (popup « Confirmez votre rôle ») — AcceptRoleCheck → autoEnterDungeon
+if AcceptRoleCheck then
+  hooksecurefunc("AcceptRoleCheck", function()
+    TM.DebugPrint("AcceptRoleCheck déclenché (leader=", tostring(_isLeader()), ")")
+    if not (TM.db and TM.db.autoEnterDungeon ~= false) then return end
+    if not _isLeader() then return end
+    if TM.BroadcastRoleCheck then TM.BroadcastRoleCheck() end
+  end)
+else
+  TM.DebugPrint("AcceptRoleCheck absent de l'API TWW — hook désactivé")
 end
 
 -- Cas 2 : portail de donjon dans le monde — ConfirmEnterInstance
@@ -683,7 +697,7 @@ delveDetectFrame:SetScript("OnEvent", function(self, event)
   end)
 end)
 
--- Côté membre : auto-accepter LFG_PROPOSAL_SHOW directement si autoEnterInstance activé.
+-- Côté membre : auto-accepter LFG_PROPOSAL_SHOW directement si autoEnterDungeon activé.
 TM.pendingInstanceAccept = false
 local lfgAutoAcceptFrame = CreateFrame("Frame")
 lfgAutoAcceptFrame:RegisterEvent("LFG_PROPOSAL_SHOW")
@@ -718,9 +732,29 @@ lfgAutoAcceptFrame:SetScript("OnEvent", function()
     end
     scanBtn(dlg, 1)
   end
-  if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
+  if not (TM.db and TM.db.autoEnterDungeon ~= false) then return end
   if _isLeader() then return end
   TM.AcceptInstanceProposal()
+end)
+
+-- Côté membre : mémoriser que LFG_ROLE_CHECK_SHOW s'est déclenché localement.
+-- Si ROLECHECK du leader arrive APRÈS → accepter immédiatement.
+-- Si ROLECHECK du leader arrive AVANT → il l'aura mis en pendingRoleCheck et lancé StartRoleCheckPoll.
+local lfgRoleCheckFrame = CreateFrame("Frame")
+lfgRoleCheckFrame:RegisterEvent("LFG_ROLE_CHECK_SHOW")
+lfgRoleCheckFrame:SetScript("OnEvent", function()
+  if not (TM.db and TM.db.autoEnterDungeon ~= false) then return end
+  TM.DebugPrint("[RoleCheck] LFG_ROLE_CHECK_SHOW reçu (pendingRoleCheck=", tostring(TM.pendingRoleCheck), ")")
+  if TM.pendingRoleCheck then
+    -- Le broadcast du leader est déjà arrivé → accepter immédiatement
+    TM.pendingRoleCheck = false
+    TM.AcceptRoleCheckForDungeon()
+    TM.DebugPrint("[RoleCheck] Acceptation immédiate (pendingRoleCheck était true)")
+  else
+    -- Le broadcast n'est pas encore arrivé → mémoriser la fenêtre de fraîcheur (15s)
+    TM._roleCheckReadyUntil = GetTime() + 15
+    TM.DebugPrint("[RoleCheck] roleCheckReadyUntil mémorisé (+15s)")
+  end
 end)
 
 -- ─── Auto-mount : leader invoque une monture → broadcast catégorie ─────

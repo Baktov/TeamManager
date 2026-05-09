@@ -1,4 +1,4 @@
--- TeamManager: UI_Main — main window (BuildUI, SelectTeam, RefreshTeamList, ToggleUI)
+﻿-- TeamManager: UI_Main — main window (BuildUI, SelectTeam, RefreshTeamList, ToggleUI)
 
 function TM.SelectTeam(name, save)
   TM.selectedTeam = name
@@ -178,11 +178,22 @@ function TM.BuildUI()
   end)
   header:SetScript("OnMouseUp", function() f:StopMovingOrSizing() end)
 
+  -- ScrollFrame pour la liste des équipes (max 30)
+  local listScroll = CreateFrame("ScrollFrame", nil, listBG, "UIPanelScrollFrameTemplate")
+  listScroll:SetPoint("TOPLEFT",     listBG, "TOPLEFT",     4,  -4)
+  listScroll:SetPoint("BOTTOMRIGHT", listBG, "BOTTOMRIGHT", -24, 4)
+  ui.listScroll = listScroll
+  local listContent = CreateFrame("Frame", nil, listScroll)
+  listContent:SetWidth(listWidth - 32)
+  listContent:SetHeight(30 * 24 + 16)
+  listScroll:SetScrollChild(listContent)
+  ui.listContent = listContent
+
   ui.listButtons = {}
-  for i = 1, 12 do
-    local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    b:SetSize(listWidth - 20, 22)
-    b:SetPoint("TOPLEFT", listBG, "TOPLEFT", 8, -8 - (i - 1) * 24)
+  for i = 1, 30 do
+    local b = CreateFrame("Button", nil, listContent, "UIPanelButtonTemplate")
+    b:SetSize(listWidth - 32, 22)
+    b:SetPoint("TOPLEFT", listContent, "TOPLEFT", 0, -8 - (i - 1) * 24)
     b:SetText("")
     b:SetScript("OnClick", function(self)
       if self.teamName then TM.SelectTeam(self.teamName) end
@@ -317,19 +328,30 @@ function TM.BuildUI()
   membersFrame:SetPoint("TOPLEFT", membersLabel, "BOTTOMLEFT", 0, -6)
   membersFrame:SetSize(sideWidth, membersHeight)
   ui.membersFrame = membersFrame
+
+  -- ScrollFrame pour les membres (max 40)
+  local membersScroll = CreateFrame("ScrollFrame", nil, membersFrame, "UIPanelScrollFrameTemplate")
+  membersScroll:SetPoint("TOPLEFT",     membersFrame, "TOPLEFT",     4,  -4)
+  membersScroll:SetPoint("BOTTOMRIGHT", membersFrame, "BOTTOMRIGHT", -24, 4)
+  ui.membersScroll = membersScroll
+  local membersContent = CreateFrame("Frame", nil, membersScroll)
+  membersContent:SetWidth(sideWidth - 28)
+  membersContent:SetHeight(40 * 22 + 12)
+  membersScroll:SetScrollChild(membersContent)
+  ui.membersContent = membersContent
   ui.memberRows   = {}
 
-  for i = 1, 16 do
+  for i = 1, 40 do
     local y = -6 - (i - 1) * 22
-    local nameLabel = membersFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    nameLabel:SetPoint("TOPLEFT", membersFrame, "TOPLEFT", 8, y)
+    local nameLabel = membersContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    nameLabel:SetPoint("TOPLEFT", membersContent, "TOPLEFT", 8, y)
     nameLabel:SetJustifyH("LEFT")
-    nameLabel:SetSize(membersFrame:GetWidth() - 16, 20)
+    nameLabel:SetSize(sideWidth - 44, 20)
     nameLabel:SetText("")
     nameLabel:Hide()
     nameLabel.memberName = nil
 
-    local clickBtn = CreateFrame("Button", nil, membersFrame)
+    local clickBtn = CreateFrame("Button", nil, membersContent)
     clickBtn:SetPoint("TOPLEFT",     nameLabel, "TOPLEFT",     -2,  2)
     clickBtn:SetPoint("BOTTOMRIGHT", nameLabel, "BOTTOMRIGHT",  2, -2)
     clickBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
@@ -386,12 +408,23 @@ function TM.BuildUI()
   optionsBG:SetPoint("TOPLEFT", optionsLabel, "BOTTOMLEFT", 0, -6)
   optionsBG:SetSize(sideWidth, membersHeight)
 
+  -- ScrollFrame pour les options (permet de défiler quand la fenêtre est réduite)
+  local optionsScroll = CreateFrame("ScrollFrame", nil, optionsBG, "UIPanelScrollFrameTemplate")
+  optionsScroll:SetPoint("TOPLEFT",     optionsBG, "TOPLEFT",     4,  -4)
+  optionsScroll:SetPoint("BOTTOMRIGHT", optionsBG, "BOTTOMRIGHT", -24, 4)
+  ui.optionsScroll = optionsScroll
+  local optionsContent = CreateFrame("Frame", nil, optionsScroll)
+  optionsContent:SetWidth(sideWidth - 28)
+  optionsContent:SetHeight(530)
+  optionsScroll:SetScrollChild(optionsContent)
+  ui.optionsContent = optionsContent
+
   -- Debug toggle (dans le panel Options)
-  local debugLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  debugLabel:SetPoint("TOPLEFT", optionsBG, "TOPLEFT", 8, -8)
+  local debugLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  debugLabel:SetPoint("TOPLEFT", optionsContent, "TOPLEFT", 8, -8)
   debugLabel:SetText("Debug")
 
-  local debugToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  local debugToggle = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
   debugToggle:SetPoint("LEFT", debugLabel, "RIGHT", 6, 0)
   debugToggle:SetSize(24, 24)
   debugToggle:SetScript("OnClick", function(self)
@@ -403,14 +436,14 @@ function TM.BuildUI()
   ui.debugToggle = debugToggle
 
   -- Préfixe sync (dans le panel Options, sous le debug)
-  local prefixLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local prefixLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   prefixLabel:SetPoint("TOPLEFT", debugLabel, "BOTTOMLEFT", 0, -14)
   prefixLabel:SetText("Pr\195\169fixe sync:")
 
-  local prefixInput = CreateFrame("EditBox", nil, optionsBG, "InputBoxTemplate")
+  local prefixInput = CreateFrame("EditBox", nil, optionsContent, "InputBoxTemplate")
   prefixInput:SetHeight(20)
   prefixInput:SetPoint("LEFT", prefixLabel, "RIGHT", 6, 0)
-  prefixInput:SetPoint("RIGHT", optionsBG, "RIGHT", -8, 0)
+  prefixInput:SetPoint("RIGHT", optionsContent, "RIGHT", -8, 0)
   prefixInput:SetAutoFocus(false)
   prefixInput:SetMaxLetters(16)
   prefixInput:SetText((TM.db and TM.db.syncPrefix and TM.db.syncPrefix ~= "") and TM.db.syncPrefix or TM.SYNC_PREFIX)
@@ -441,11 +474,11 @@ function TM.BuildUI()
   ui.prefixInput = prefixInput
 
   -- Option : affichage état follow/assist dans la fenêtre flottante
-  local stateLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local stateLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   stateLabel:SetPoint("TOPLEFT", prefixLabel, "BOTTOMLEFT", 0, -14)
   stateLabel:SetText("Affichage état follow/assist")
 
-  local stateToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  local stateToggle = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
   stateToggle:SetPoint("LEFT", stateLabel, "RIGHT", 6, 0)
   stateToggle:SetSize(24, 24)
   stateToggle:SetScript("OnClick", function(self)
@@ -467,11 +500,11 @@ function TM.BuildUI()
   ui.stateToggle = stateToggle
 
   -- Option : accepter les quêtes automatiquement
-  local questLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local questLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   questLabel:SetPoint("TOPLEFT", stateLabel, "BOTTOMLEFT", 0, -24)
   questLabel:SetText("Accepter les qu\195\170tes auto")
 
-  local questToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  local questToggle = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
   questToggle:SetPoint("LEFT", questLabel, "RIGHT", 6, 0)
   questToggle:SetSize(24, 24)
   questToggle:SetScript("OnClick", function(self)
@@ -489,11 +522,11 @@ function TM.BuildUI()
   ui.questToggle = questToggle
 
   -- Option : valider les quêtes automatiquement (remise)
-  local validateQuestLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local validateQuestLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   validateQuestLabel:SetPoint("TOPLEFT", questLabel, "BOTTOMLEFT", 0, -24)
   validateQuestLabel:SetText("Valider les qu\195\170tes auto")
 
-  local validateQuestToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  local validateQuestToggle = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
   validateQuestToggle:SetPoint("LEFT", validateQuestLabel, "RIGHT", 6, 0)
   validateQuestToggle:SetSize(24, 24)
   validateQuestToggle:SetScript("OnClick", function(self)
@@ -512,11 +545,11 @@ function TM.BuildUI()
   ui.validateQuestToggle = validateQuestToggle
 
   -- Option : sélection de dialogue PNJ automatique
-  local gossipLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local gossipLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   gossipLabel:SetPoint("TOPLEFT", validateQuestLabel, "BOTTOMLEFT", 0, -24)
   gossipLabel:SetText("S\195\169lection dialogue PNJ auto")
 
-  local gossipToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  local gossipToggle = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
   gossipToggle:SetPoint("LEFT", gossipLabel, "RIGHT", 6, 0)
   gossipToggle:SetSize(24, 24)
   gossipToggle:SetScript("OnClick", function(self)
@@ -535,11 +568,11 @@ function TM.BuildUI()
   ui.gossipToggle = gossipToggle
 
   -- Option : passer les cinématiques automatiquement
-  local cinematicLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local cinematicLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   cinematicLabel:SetPoint("TOPLEFT", gossipLabel, "BOTTOMLEFT", 0, -24)
   cinematicLabel:SetText("Passer les cin\195\169matiques auto")
 
-  local cinematicToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  local cinematicToggle = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
   cinematicToggle:SetPoint("LEFT", cinematicLabel, "RIGHT", 6, 0)
   cinematicToggle:SetSize(24, 24)
   cinematicToggle:SetScript("OnClick", function(self)
@@ -558,11 +591,11 @@ function TM.BuildUI()
   ui.cinematicToggle = cinematicToggle
 
   -- Option : maître de vol automatique
-  local taxiLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local taxiLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   taxiLabel:SetPoint("TOPLEFT", cinematicLabel, "BOTTOMLEFT", 0, -24)
   taxiLabel:SetText("Vol automatique (ma\195\174tre de vol)")
 
-  local taxiToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  local taxiToggle = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
   taxiToggle:SetPoint("LEFT", taxiLabel, "RIGHT", 6, 0)
   taxiToggle:SetSize(24, 24)
   taxiToggle:SetScript("OnClick", function(self)
@@ -581,11 +614,11 @@ function TM.BuildUI()
   ui.taxiToggle = taxiToggle
 
   -- Option : entrée d'instance automatique
-  local instanceLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local instanceLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   instanceLabel:SetPoint("TOPLEFT", taxiLabel, "BOTTOMLEFT", 0, -24)
   instanceLabel:SetText("Entrée instance auto (gouffre)")
 
-  local instanceToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  local instanceToggle = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
   instanceToggle:SetPoint("LEFT", instanceLabel, "RIGHT", 6, 0)
   instanceToggle:SetSize(24, 24)
   instanceToggle:SetScript("OnClick", function(self)
@@ -603,12 +636,36 @@ function TM.BuildUI()
   instanceToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
   ui.instanceToggle = instanceToggle
 
+  -- Option : entrée en donjon automatique (rôle LFG + groupe formé)
+  local dungeonLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  dungeonLabel:SetPoint("TOPLEFT", instanceLabel, "BOTTOMLEFT", 0, -24)
+  dungeonLabel:SetText("Entr\195\169e en donjon")
+
+  local dungeonToggle = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
+  dungeonToggle:SetPoint("LEFT", dungeonLabel, "RIGHT", 6, 0)
+  dungeonToggle:SetSize(24, 24)
+  dungeonToggle:SetScript("OnClick", function(self)
+    TM.db.autoEnterDungeon = self:GetChecked()
+  end)
+  dungeonToggle:SetChecked(TM.db.autoEnterDungeon ~= false)
+  dungeonToggle:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("Entr\195\169e en donjon automatique")
+    GameTooltip:AddLine("Quand le leader accepte « Confirmez votre r\195\180le »,", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("les membres valident aussi leur r\195\180le automatiquement.", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("Quand le leader clique Entrer (groupe form\195\169),", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("les membres entrent dans le donjon automatiquement.", 0.8, 0.8, 0.8)
+    GameTooltip:Show()
+  end)
+  dungeonToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  ui.dungeonToggle = dungeonToggle
+
   -- Option : alerte « perte de follow » sur le panel flottant
-  local followAlertLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  followAlertLabel:SetPoint("TOPLEFT", instanceLabel, "BOTTOMLEFT", 0, -24)
+  local followAlertLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  followAlertLabel:SetPoint("TOPLEFT", dungeonLabel, "BOTTOMLEFT", 0, -24)
   followAlertLabel:SetText("Alerte perte de follow")
 
-  local followAlertToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  local followAlertToggle = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
   followAlertToggle:SetPoint("LEFT", followAlertLabel, "RIGHT", 6, 0)
   followAlertToggle:SetSize(24, 24)
   followAlertToggle:SetScript("OnClick", function(self)
@@ -627,11 +684,11 @@ function TM.BuildUI()
   ui.followAlertToggle = followAlertToggle
 
   -- Option : auto-mount (les membres invoquent une monture quand le leader monte)
-  local autoMountLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local autoMountLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   autoMountLabel:SetPoint("TOPLEFT", followAlertLabel, "BOTTOMLEFT", 0, -24)
   autoMountLabel:SetText("Monture auto (m\195\170me type)")
 
-  local autoMountToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  local autoMountToggle = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
   autoMountToggle:SetPoint("LEFT", autoMountLabel, "RIGHT", 6, 0)
   autoMountToggle:SetSize(24, 24)
   autoMountToggle:SetScript("OnClick", function(self)
@@ -651,11 +708,11 @@ function TM.BuildUI()
   ui.autoMountToggle = autoMountToggle
 
   -- Option : utiliser la pierre de foyer du leader (leader clique -> membres utilisent)
-  local hearthLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local hearthLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   hearthLabel:SetPoint("TOPLEFT", autoMountLabel, "BOTTOMLEFT", 0, -24)
   hearthLabel:SetText("Pierre de foyer sync")
 
-  local hearthToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  local hearthToggle = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
   hearthToggle:SetPoint("LEFT", hearthLabel, "RIGHT", 6, 0)
   hearthToggle:SetSize(24, 24)
   hearthToggle:SetScript("OnClick", function(self)
@@ -808,15 +865,19 @@ function TM.BuildUI()
     local iw  = math.max(140, rw - 220)
     local sw  = math.floor((w - lw - 52) / 2)
     if ui.listBG      then ui.listBG:SetSize(lw, lih) end
-    if ui.listButtons then for _, b in ipairs(ui.listButtons) do b:SetWidth(lw - 20) end end
+    if ui.listContent then ui.listContent:SetWidth(lw - 32) end
+    if ui.listButtons then for _, b in ipairs(ui.listButtons) do b:SetWidth(lw - 32) end end
     if ui.membersFrame then
       ui.membersFrame:SetSize(sw, mh)
+      if ui.membersContent then ui.membersContent:SetWidth(sw - 28) end
       if ui.memberRows then
-        local labelW = sw - 16
+        local labelW = sw - 44
         for _, row in ipairs(ui.memberRows) do row.nameLabel:SetWidth(labelW) end
       end
     end
     if ui.optionsBG   then ui.optionsBG:SetSize(sw, mh) end
+    if ui.optionsScroll   then ui.optionsScroll:SetHeight(mh - 8) end
+    if ui.optionsContent  then ui.optionsContent:SetWidth(sw - 28) end
     if ui.memberInput then ui.memberInput:SetWidth(iw) end
   end)
 

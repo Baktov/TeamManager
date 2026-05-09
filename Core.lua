@@ -17,6 +17,8 @@ TM.charDb = TeamManagerCharDB
 TM.debugEnabled = TM.db.debug or false
 -- Default options: enable auto-hearth by default unless explicitly disabled
 if TM.db.autoHearth == nil then TM.db.autoHearth = true end
+-- Default option: auto-accept LFG role check + proposal (dungeon entry)
+if TM.db.autoEnterDungeon == nil then TM.db.autoEnterDungeon = true end
 
 -- UI and forward declarations so handlers in other files can reference them early
 TM.ui = {}
@@ -213,6 +215,70 @@ function TM.StartDelveExitPoll(remaining)
     end
   end
   C_Timer.After(0.5, function() TM.StartDelveExitPoll(remaining - 1) end)
+end
+
+-- ─── SecureHandler pour AcceptRoleCheck() (fonction protégée TWW) ─────────
+-- Appelé côté membre quand ROLECHECK est reçu du leader.
+-- AcceptRoleCheck() valide le popup « Confirmez votre rôle » (LFG_ROLE_CHECK_SHOW).
+do
+  local _fRC = CreateFrame("Frame", "TM_SecureRoleCheckFrame", UIParent, "SecureHandlerBaseTemplate")
+  local _seqRC = 0
+  _fRC:SetAttribute("_onattributechanged", [[
+    if name ~= "tm-rolecheck" then return end
+    AcceptRoleCheck()
+  ]])
+
+  function TM.AcceptRoleCheckForDungeon()
+    if InCombatLockdown and InCombatLockdown() then
+      TM.DebugPrint("AcceptRoleCheckForDungeon: en combat, skip")
+      return false
+    end
+    _seqRC = _seqRC + 1
+    local s = tostring(_seqRC)
+    C_Timer.After(0, function()
+      _fRC:SetAttribute("tm-rolecheck", s)
+      TM.DebugPrint("AcceptRoleCheckForDungeon: SecureHandler déclenché (seq=" .. s .. ")")
+    end)
+    return true
+  end
+end
+
+-- Polling : vérifie toutes les 0.5s si le popup de rôle LFG est apparu.
+-- Utilisé côté membre quand ROLECHECK reçu avant que la popup n'apparaisse.
+-- Ne repose PAS sur la visibilité des frames (compatibilité ElvUI/DialogueUI) :
+-- l'event LFG_ROLE_CHECK_SHOW (géré dans Events.lua) consommera pendingRoleCheck
+-- dès qu'il fire côté membre, indépendamment de l'UI affichée.
+-- Ce polling est un filet de sécurité supplémentaire via l'API GetLFGRoleUpdate.
+TM.pendingRoleCheck = false
+function TM.StartRoleCheckPoll(remaining)
+  remaining = remaining or 30
+  if remaining <= 0 or not TM.pendingRoleCheck then
+    TM.DebugPrint("StartRoleCheckPoll: arrêt (remaining=" .. tostring(remaining) ..
+      " pending=" .. tostring(TM.pendingRoleCheck) .. ")")
+    return
+  end
+  -- Vérification API : C_LFGList ou GetLFGRoleUpdate indiquent si une vérification est en cours
+  -- (compatible UI de base et ElvUI car indépendant de la visibilité des frames)
+  local roleCheckActive = false
+  if C_LFGList and C_LFGList.GetActiveEntryInfo then
+    -- pas d'API directe de role-check status en TWW ; on se fie à l'event
+    roleCheckActive = false
+  end
+  -- Fallback frames natifs (utile si LFG_ROLE_CHECK_SHOW n'a pas encore été reçu localement)
+  for _, fname in ipairs({"LFGDungeonRoleCheckFrame", "LFGRoleCheckPopup"}) do
+    local fr = _G[fname]
+    if fr and fr:IsShown() then
+      roleCheckActive = true
+      TM.DebugPrint("StartRoleCheckPoll: " .. fname .. " visible -> AcceptRoleCheckForDungeon")
+      break
+    end
+  end
+  if roleCheckActive then
+    TM.pendingRoleCheck = false
+    TM.AcceptRoleCheckForDungeon()
+    return
+  end
+  C_Timer.After(0.5, function() TM.StartRoleCheckPoll(remaining - 1) end)
 end
 
 -- Polling : vérifie toutes les 0.5s si un dialog d'instance est apparu.
