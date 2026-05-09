@@ -547,12 +547,20 @@ if StopCinematic then
     if TM.BroadcastCinematicSkip then TM.BroadcastCinematicSkip("cinematic") end
   end)
 end
--- Hook secondaire sur le wrapper Lua (au cas où un addon court-circuite StopCinematic)
+-- Hook secondaire sur CinematicFrame_CancelCinematic pour capturer les SCÈNES
+-- (IsInCinematicScene → CancelScene), car celles-ci ne passent PAS par StopCinematic.
+-- Pour les vraies cinématiques (isRealCinematic = true), StopCinematic est
+-- appelé en interne → déjà capturé par le hook StopCinematic → on évite le
+-- double broadcast en retournant immédiatement.
 if CinematicFrame_CancelCinematic then
   hooksecurefunc("CinematicFrame_CancelCinematic", function()
-    TM.DebugPrint("[CinematicHook] CinematicFrame_CancelCinematic isLeader=", tostring(_isLeader()))
+    TM.DebugPrint("[CinematicHook] CinematicFrame_CancelCinematic isLeader=", tostring(_isLeader()),
+      "isRealCinematic=", tostring(CinematicFrame and CinematicFrame.isRealCinematic))
     if not (TM.db and TM.db.autoSkipCinematic ~= false) then return end
     if not _isLeader() then return end
+    -- Vraie cinématique moteur → StopCinematic hook s'en charge → ne pas doubler.
+    if CinematicFrame and CinematicFrame.isRealCinematic then return end
+    -- Scène cinématique ou autre → broadcaster.
     if TM.BroadcastCinematicSkip then TM.BroadcastCinematicSkip("cinematic") end
   end)
 end

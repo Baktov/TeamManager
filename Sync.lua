@@ -250,11 +250,23 @@ function TM.ApplyCinematicSkip(kind, allowPending)
       TM.DebugPrint("Auto-skip vid\195\169o (membre)")
     end
   else
-    if CinematicFrame and CinematicFrame:IsShown() and StopCinematic then
-      _dismissCinematicConfirm()
-      StopCinematic()
+    if CinematicFrame and CinematicFrame:IsShown() then
+      -- Utilise le bon chemin selon le type de cinématique (source Blizzard) :
+      --   isRealCinematic = true  → cinématique moteur classique → StopCinematic()
+      --   isRealCinematic = false + IsInCinematicScene() → scène → CancelScene()
+      --   fallback                                        → StopCinematic()
+      -- NE PAS appeler _dismissCinematicConfirm() avant : CinematicFrame:Hide()
+      -- (via CINEMATIC_STOP) cache déjà closeDialog en tant que child.
+      if CinematicFrame.isRealCinematic then
+        if StopCinematic then StopCinematic() end
+      elseif IsInCinematicScene and IsInCinematicScene() then
+        if CanCancelScene and CanCancelScene() then CancelScene() end
+      elseif StopCinematic then
+        StopCinematic()
+      end
       done = true
-      TM.DebugPrint("Auto-skip cin\195\169matique (membre)")
+      TM.DebugPrint("Auto-skip cin\195\169matique (membre, isRealCinematic=",
+        tostring(CinematicFrame.isRealCinematic), ")")
     end
   end
   if not done and allowPending then
