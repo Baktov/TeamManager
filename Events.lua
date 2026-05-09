@@ -750,3 +750,30 @@ mountCastFrame:SetScript("OnEvent", function(self, event, unit, _, spellID)
     "mountID=", mountID, "category=", category)
   if TM.BroadcastMount then TM.BroadcastMount(category) end
 end)
+
+
+-- ─── Hearthstone sync : leader utilise une pierre de foyer -> broadcast ───
+local _lastHearthBroadcast = 0
+local hearthKeywords = { "Hearthstone", "Pierre de foyer", "Pierre de foyer :", "Hearth" }
+local hearthCastFrame = CreateFrame("Frame")
+hearthCastFrame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
+hearthCastFrame:SetScript("OnEvent", function(self, event, unit, _, spellID)
+  if not spellID then return end
+  if not (TM.db and TM.db.autoHearth ~= false) then return end
+  if not _isLeader() then return end
+  local sname = GetSpellInfo(spellID)
+  if not sname then return end
+  for _, kw in ipairs(hearthKeywords) do
+    if sname:find(kw) then
+      local now = GetTime()
+      if (now - _lastHearthBroadcast) < 5 then
+        TM.DebugPrint("[HearthHook] anti-spam, skip (spell=", sname, ")")
+        return
+      end
+      _lastHearthBroadcast = now
+      if TM.BroadcastHearth then TM.BroadcastHearth() end
+      TM.DebugPrint("[HearthHook] leader cast hearth spell=", sname)
+      return
+    end
+  end
+end)

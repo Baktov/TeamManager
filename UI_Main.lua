@@ -650,6 +650,29 @@ function TM.BuildUI()
   autoMountToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
   ui.autoMountToggle = autoMountToggle
 
+  -- Option : utiliser la pierre de foyer du leader (leader clique -> membres utilisent)
+  local hearthLabel = optionsBG:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  hearthLabel:SetPoint("TOPLEFT", autoMountLabel, "BOTTOMLEFT", 0, -24)
+  hearthLabel:SetText("Pierre de foyer sync")
+
+  local hearthToggle = CreateFrame("CheckButton", nil, optionsBG, "UICheckButtonTemplate")
+  hearthToggle:SetPoint("LEFT", hearthLabel, "RIGHT", 6, 0)
+  hearthToggle:SetSize(24, 24)
+  hearthToggle:SetScript("OnClick", function(self)
+    TM.db.autoHearth = self:GetChecked()
+  end)
+  hearthToggle:SetChecked(TM.db.autoHearth ~= false)
+  hearthToggle:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("Activer la synchronisation de pierre de foyer")
+    GameTooltip:AddLine("Quand le leader utilise sa pierre de foyer, les membres", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("tentent d'utiliser leur propre pierre de foyer (ou équivalent).", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("Compatible: pierre standard en sac et invocation via TeleportMenu.", 0.8, 0.8, 0.8)
+    GameTooltip:Show()
+  end)
+  hearthToggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  ui.hearthToggle = hearthToggle
+
   -- Member input row
   local inputWidth = math.max(140, rightWidth - 220)
   ui.memberInput = CreateFrame("EditBox", nil, f, "InputBoxTemplate")

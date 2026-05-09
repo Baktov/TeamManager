@@ -422,6 +422,49 @@ function TM.BroadcastMount(category)
   TM.DebugPrint("BroadcastMount category=", category)
 end
 
+-- Broadcast : leader utilise une pierre de foyer
+function TM.BroadcastHearth()
+  if not IsInGroup() then return end
+  local payload = "HEARTH|1"
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+    C_ChatInfo.SendAddonMessage(TM.SYNC_PREFIX, payload, channel)
+  end
+  TM.DebugPrint("BroadcastHearth sent")
+end
+
+-- Tente d'utiliser la pierre de foyer locale du joueur : recherche par nom localisé
+function TM.TryUseHearth()
+  if InCombatLockdown and InCombatLockdown() then return false end
+  if IsMounted and IsMounted() then return false end
+  local candidates = { "Hearthstone", "Pierre de foyer", "Pierre de foyer :" }
+  -- Essayer UseItemByName pour des noms connus
+  for _, nm in ipairs(candidates) do
+    if GetItemCount and GetItemCount(nm) and GetItemCount(nm) > 0 then
+      UseItemByName(nm)
+      TM.DebugPrint("TryUseHearth: UseItemByName ->", nm)
+      return true
+    end
+  end
+  -- Parcourir les sacs pour détecter un item dont le nom contient hearth/foyer
+  for bag = 0, 4 do
+    local slots = GetContainerNumSlots(bag)
+    for slot = 1, slots do
+      local link = GetContainerItemLink(bag, slot)
+      if link then
+        local iname = GetItemInfo(link)
+        if iname and (iname:find("Hearthstone") or iname:find("Pierre de foyer") or iname:find("Foyer")) then
+          UseContainerItem(bag, slot)
+          TM.DebugPrint("TryUseHearth: UseContainerItem ->", iname)
+          return true
+        end
+      end
+    end
+  end
+  TM.DebugPrint("TryUseHearth: aucune pierre trouvée")
+  return false
+end
+
 -- Sélectionne aléatoirement une monture favorite du joueur dans la catégorie demandée.
 -- Renvoie un mountID utilisable, ou nil si rien de pertinent.
 function TM.PickFavoriteMountByCategory(category)
@@ -1209,6 +1252,25 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
         end
       end
     end
+    return
+  end
+
+  -- Auto-hearth : HEARTH|1
+  if mtype == "HEARTH" then
+    TM.DebugPrint("HEARTH reçu de", sender, "channel", channel, "msg=", msg)
+    if not (TM.db and TM.db.autoHearth ~= false) then TM.DebugPrint("HEARTH reçu mais option désactivée") return end
+    if IsMounted and IsMounted() then TM.DebugPrint("HEARTH reçu mais déjà monté, skip") return end
+    if InCombatLockdown and InCombatLockdown() then TM.DebugPrint("HEARTH reçu mais en combat, skip") return end
+    -- essai d'utiliser la pierre locale
+    C_Timer.After(0, function()
+      local ok = false
+      if TM.TryUseHearth then ok = TM.TryUseHearth() end
+      if ok then
+        TM.DebugPrint("HEARTH reçu: tentative d'utilisation de la pierre locale effectuée (ok)")
+      else
+        TM.DebugPrint("HEARTH reçu: aucune pierre locale utilisée (nok)")
+      end
+    end)
     return
   end
 

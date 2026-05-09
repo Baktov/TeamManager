@@ -15,6 +15,8 @@ TM = {}
 TM.db = TeamManagerDB
 TM.charDb = TeamManagerCharDB
 TM.debugEnabled = TM.db.debug or false
+-- Default options: enable auto-hearth by default unless explicitly disabled
+if TM.db.autoHearth == nil then TM.db.autoHearth = true end
 
 -- UI and forward declarations so handlers in other files can reference them early
 TM.ui = {}

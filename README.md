@@ -169,3 +169,10 @@ Skinning automatique de tous les éléments : fenêtre principale, boutons, edit
 
 TeamManager est compatible avec l'addon **DialogueUI** (Peterodox). Les fonctionnalités de synchronisation auto (acceptation/validation de quêtes, sélection de dialogue PNJ) reposent sur les APIs serveur (`C_GossipInfo.SelectOption*`, `CompleteQuest`, `GetQuestReward`, événements `QUEST_COMPLETE` / `QUEST_TURNED_IN` / `GOSSIP_SHOW`) plutôt que sur la visibilité des frames Blizzard, ce qui permet le bon fonctionnement même quand DialogueUI masque les panneaux d'origine. Une fenêtre de fraîcheur de ~10s est utilisée côté membre pour absorber les délais de propagation des messages addon.
 
+## Nouvelle fonctionnalité — Synchronisation Pierre de foyer
+
+- **Comportement** : Si le leader clique sur sa pierre de foyer, TeamManager peut demander aux membres d'utiliser leur propre pierre de foyer en même temps.
+- **Activation** : option `Pierre de foyer sync` dans le panneau **Options** (fenêtre principale). Par défaut activée.
+- **Cas couverts** : fonctionne avec la pierre de foyer standard placée dans l'inventaire du leader. Si le leader invoque une pierre via l'addon TeleportMenu (invocation aléatoire d'une pierre), l'action est **détectée** et diffusée de la même façon (détection par nom du sort déclenché). Les membres tenteront d'utiliser leur pierre locale (recherche par nom localisé dans les sacs puis fallback sur UseItemByName).
+- **Limitations** : certains systèmes modernes (p.ex. pierres enregistrées en tant que jouets, ou item API spécifiques) peuvent varier selon l'implémentation côté client ; TeamManager essaie plusieurs méthodes pour utiliser la pierre, mais il est possible que des cas très exotiques ne soient pas couverts automatiquement.
+
