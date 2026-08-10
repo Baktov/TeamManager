@@ -947,10 +947,19 @@ hearthCastFrame:SetScript("OnEvent", function(self, event, unit, _, spellID)
   if not spellID then return end
   if not (TM.db and TM.db.autoHearth ~= false) then return end
   if not _isLeader() then return end
-  -- Compatibilité TWW : GetSpellInfo peut renvoyer nil ; fallback sur C_Spell.GetSpellName
-  local sname = GetSpellInfo and GetSpellInfo(spellID) or nil
+  -- Retail 11.0+ : GetSpellInfo est déprécié (shim Blizzard_Deprecated). Chemin nominal =
+  -- C_Spell.GetSpellInfo(spellID) qui renvoie une table {name, iconID, castTime, ...},
+  -- fallback C_Spell.GetSpellName, puis global déprécié en dernier recours.
+  local sname
+  if C_Spell and C_Spell.GetSpellInfo then
+    local info = C_Spell.GetSpellInfo(spellID)
+    sname = info and info.name or nil
+  end
   if not sname and C_Spell and C_Spell.GetSpellName then
     sname = C_Spell.GetSpellName(spellID)
+  end
+  if not sname and GetSpellInfo then
+    sname = GetSpellInfo(spellID)
   end
   if not _isHearthSpell(spellID, sname) then return end
   local now = GetTime()

@@ -40,9 +40,13 @@ function TM.BroadcastXPSync()
   local _, raceFile  = UnitRace("player");  raceFile  = raceFile  or ""
   local faction = UnitFactionGroup("player") or ""
   local specName = ""
-  if GetSpecialization and GetSpecializationInfo then
-    local specIdx = GetSpecialization()
-    if specIdx then specName = select(2, GetSpecializationInfo(specIdx)) or "" end
+  -- Retail 11.0+ : C_SpecializationInfo.* (globales GetSpecialization*/GetSpecializationInfo
+  -- sont maintenues via Blizzard_DeprecatedSpecialization mais devraient disparaître).
+  local getSpec     = (C_SpecializationInfo and C_SpecializationInfo.GetSpecialization) or GetSpecialization
+  local getSpecInfo = (C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo) or GetSpecializationInfo
+  if getSpec and getSpecInfo then
+    local specIdx = getSpec()
+    if specIdx then specName = select(2, getSpecInfo(specIdx)) or "" end
   end
   local sex = UnitSex("player") or 2
   -- cache locally
@@ -494,6 +498,8 @@ function TM.TryUseHearth()
   local getItemID   = C_Container and C_Container.GetContainerItemID
   local getItemLink = (C_Container and C_Container.GetContainerItemLink) or GetContainerItemLink
   local useItem     = (C_Container and C_Container.UseContainerItem) or UseContainerItem
+  -- Retail 11.0+ : C_Item.GetItemInfo (globale GetItemInfo maintenue par Blizzard_DeprecatedItemScript)
+  local getItemInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
 
   -- Passe 1 : détection par ItemID (fiable, ne dépend pas de la localisation)
   for bag = 0, 4 do
@@ -519,7 +525,7 @@ function TM.TryUseHearth()
     for slot = 1, slots do
       local link = getItemLink(bag, slot)
       if link then
-        local iname = GetItemInfo(link)
+        local iname = getItemInfo and getItemInfo(link)
         if _matchesHearthItem(iname) then
           useItem(bag, slot)
           TM.DebugPrint("TryUseHearth: UseContainerItem (par nom) ->", iname)
@@ -535,7 +541,7 @@ function TM.TryUseHearth()
   -- notre dernier recours quand le membre n'a que des hearthstones-toys.
   if UseItemByName then
     for _, itemID in ipairs(_hearthItemIDsMember) do
-      local name = GetItemInfo and GetItemInfo(itemID)
+      local name = getItemInfo and getItemInfo(itemID)
       if name and PlayerHasToy and PlayerHasToy(itemID) then
         UseItemByName(name)
         TM.DebugPrint("TryUseHearth: UseItemByName (toy) ->", name, "(", itemID, ")")
