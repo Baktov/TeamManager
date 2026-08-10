@@ -154,8 +154,12 @@ do
   end
 end
 
--- Validation de sortie de Gouffre (Delve TWW) : clic sur StaticPopup Button1 uniquement.
--- N'appelle PAS les APIs d'entrée (LFGTeleport / AcceptProposal / ConfirmEnterInstance).
+-- Validation de sortie de Gouffre (Delve TWW) : 3 mécanismes complémentaires.
+--   1. C_PartyInfo.SetInstanceAbandonVoteResponse(true) — non protégée,
+--      vote OUI au popup VOTE_ABANDON_INSTANCE_VOTE (« Souhaitez-vous partir ? »).
+--      Le popup utilise le cadre réservé InstanceAbandonPopup, PAS StaticPopup1..4.
+--   2. LFGTeleport(true) via SecureHandler — sortie LFG/Delve solo (sans vote).
+--   3. Click StaticPopup1..4 Button1 via SecureHandler — popups d'extension/portails classiques.
 do
   local _fExit = CreateFrame("Frame", "TM_SecureExitFrame", UIParent, "SecureHandlerBaseTemplate")
   local _seqExit = 0
@@ -174,6 +178,10 @@ do
     if btn and btn:IsShown() then btn:Click() end
     btn = self:GetFrameRef("sp4")
     if btn and btn:IsShown() then btn:Click() end
+    -- InstanceAbandonPopup : popup de vote Delve TWW (cadre réservé,
+    -- PAS dans StaticPopup1..4). Click direct sur Button1 si visible.
+    btn = self:GetFrameRef("abandonBtn")
+    if btn and btn:IsShown() then btn:Click() end
   ]])
 
   function TM.ConfirmDelveExit()
@@ -181,10 +189,29 @@ do
       TM.DebugPrint("ConfirmDelveExit: en combat, skip")
       return false
     end
+    -- 1) Vote d'abandon TWW : appel direct API non-protégée (préféré)
+    if C_PartyInfo and C_PartyInfo.SetInstanceAbandonVoteResponse then
+      local timeLeft = 0
+      if C_PartyInfo.GetInstanceAbandonVoteTime then
+        local _, t = C_PartyInfo.GetInstanceAbandonVoteTime()
+        timeLeft = t or 0
+      end
+      if timeLeft > 0 then
+        C_PartyInfo.SetInstanceAbandonVoteResponse(true)
+        TM.DebugPrint("ConfirmDelveExit: SetInstanceAbandonVoteResponse(true) (timeLeft=" ..
+          tostring(timeLeft) .. ")")
+      else
+        TM.DebugPrint("ConfirmDelveExit: pas de vote actif, fallback SecureHandler")
+      end
+    end
+    -- 2) Refs StaticPopup Button1 (popups classiques)
     for i = 1, 4 do
       local btn = _G["StaticPopup" .. i .. "Button1"]
       if btn then _fExit:SetFrameRef("sp" .. i, btn) end
     end
+    -- 3) Ref InstanceAbandonPopup Button1 (popup vote Delve TWW)
+    local abandonBtn = _G["InstanceAbandonPopupButton1"]
+    if abandonBtn then _fExit:SetFrameRef("abandonBtn", abandonBtn) end
     _seqExit = _seqExit + 1
     local s = tostring(_seqExit)
     C_Timer.After(0, function()
@@ -205,6 +232,26 @@ function TM.StartDelveExitPoll(remaining)
       " pending=" .. tostring(TM.pendingDelveExit) .. ")")
     return
   end
+  -- 1) Vote d'abandon Delve TWW actif ?
+  if C_PartyInfo and C_PartyInfo.GetInstanceAbandonVoteTime then
+    local _, timeLeft = C_PartyInfo.GetInstanceAbandonVoteTime()
+    if timeLeft and timeLeft > 0 then
+      TM.DebugPrint("StartDelveExitPoll: vote d'abandon actif (timeLeft=" ..
+        tostring(timeLeft) .. ") -> ConfirmDelveExit")
+      TM.pendingDelveExit = false
+      TM.ConfirmDelveExit()
+      return
+    end
+  end
+  -- 2) InstanceAbandonPopup visible ?
+  local ipop = _G["InstanceAbandonPopup"]
+  if ipop and ipop:IsShown() then
+    TM.DebugPrint("StartDelveExitPoll: InstanceAbandonPopup visible -> ConfirmDelveExit")
+    TM.pendingDelveExit = false
+    TM.ConfirmDelveExit()
+    return
+  end
+  -- 3) StaticPopup classique ?
   for i = 1, 4 do
     local p = _G["StaticPopup" .. i]
     if p and p:IsShown() then

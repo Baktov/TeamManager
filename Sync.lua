@@ -457,34 +457,93 @@ function TM.BroadcastHearth()
   TM.DebugPrint("BroadcastHearth sent")
 end
 
--- Tente d'utiliser la pierre de foyer locale du joueur : recherche par nom localisé
+-- Tente d'utiliser la pierre de foyer locale du joueur.
+-- Stratégie en 2 passes (membre n'a pas forcément les mêmes pierres que le leader) :
+--   1) Détection par ItemID via une liste de hearthstones connus (synchronisée
+--      avec TeleportMenu/Data/Hearthstones.lua + Hearthstone classique).
+--   2) Fallback nom localisé pour couvrir les pierres absentes de la liste.
+-- Compatibilité TWW : C_Container.* préféré, fallback compat-shims.
+local _hearthItemIDsMember = {
+  6948,
+  54452, 64488, 93672, 142542, 162973, 163045, 163206, 165669, 165670,
+  165802, 166746, 166747, 168907, 172179, 180290, 182773, 183716, 184353,
+  188952, 190196, 190237, 193588, 200630, 206195, 208704, 209035, 210455,
+  212337, 228940, 236687, 235016, 245970, 246565, 263489,
+  110560, 140192,
+}
+local _hearthItemIDSet = {}
+for _, id in ipairs(_hearthItemIDsMember) do _hearthItemIDSet[id] = true end
+
+local _hearthItemPatterns = {
+  "hearthstone", "pierre de foyer", "portail de village",
+}
+local function _matchesHearthItem(name)
+  if not name then return false end
+  local low = name:lower()
+  for _, pat in ipairs(_hearthItemPatterns) do
+    if low:find(pat, 1, true) then return true end
+  end
+  return false
+end
+
 function TM.TryUseHearth()
   if InCombatLockdown and InCombatLockdown() then return false end
   if IsMounted and IsMounted() then return false end
-  local candidates = { "Hearthstone", "Pierre de foyer", "Pierre de foyer :" }
-  -- Essayer UseItemByName pour des noms connus
-  for _, nm in ipairs(candidates) do
-    if GetItemCount and GetItemCount(nm) and GetItemCount(nm) > 0 then
-      UseItemByName(nm)
-      TM.DebugPrint("TryUseHearth: UseItemByName ->", nm)
-      return true
+  -- API de conteneur : TWW (C_Container) avec fallback compat
+  local getNumSlots = (C_Container and C_Container.GetContainerNumSlots) or GetContainerNumSlots
+  local getItemID   = C_Container and C_Container.GetContainerItemID
+  local getItemLink = (C_Container and C_Container.GetContainerItemLink) or GetContainerItemLink
+  local useItem     = (C_Container and C_Container.UseContainerItem) or UseContainerItem
+
+  -- Passe 1 : détection par ItemID (fiable, ne dépend pas de la localisation)
+  for bag = 0, 4 do
+    local slots = getNumSlots(bag) or 0
+    for slot = 1, slots do
+      local itemID = getItemID and getItemID(bag, slot)
+      if not itemID then
+        -- Fallback : extraire l'ID depuis le link
+        local link = getItemLink(bag, slot)
+        if link then itemID = tonumber(link:match("item:(%d+)")) end
+      end
+      if itemID and _hearthItemIDSet[itemID] then
+        useItem(bag, slot)
+        TM.DebugPrint("TryUseHearth: UseContainerItem (par ID) ->", itemID)
+        return true
+      end
     end
   end
-  -- Parcourir les sacs pour détecter un item dont le nom contient hearth/foyer
+
+  -- Passe 2 : fallback par nom localisé pour pierres non répertoriées
   for bag = 0, 4 do
-    local slots = GetContainerNumSlots(bag)
+    local slots = getNumSlots(bag) or 0
     for slot = 1, slots do
-      local link = GetContainerItemLink(bag, slot)
+      local link = getItemLink(bag, slot)
       if link then
         local iname = GetItemInfo(link)
-        if iname and (iname:find("Hearthstone") or iname:find("Pierre de foyer") or iname:find("Foyer")) then
-          UseContainerItem(bag, slot)
-          TM.DebugPrint("TryUseHearth: UseContainerItem ->", iname)
+        if _matchesHearthItem(iname) then
+          useItem(bag, slot)
+          TM.DebugPrint("TryUseHearth: UseContainerItem (par nom) ->", iname)
           return true
         end
       end
     end
   end
+
+  -- Passe 3 : fallback toys via UseItemByName (les toys ne sont PAS dans les sacs).
+  -- Note : UseItemByName est sujet à la restriction « hardware event » de WoW pour
+  -- les toys ; ça ne fonctionne pas toujours hors clic utilisateur, mais c'est
+  -- notre dernier recours quand le membre n'a que des hearthstones-toys.
+  if UseItemByName then
+    for _, itemID in ipairs(_hearthItemIDsMember) do
+      local name = GetItemInfo and GetItemInfo(itemID)
+      if name and PlayerHasToy and PlayerHasToy(itemID) then
+        UseItemByName(name)
+        TM.DebugPrint("TryUseHearth: UseItemByName (toy) ->", name, "(", itemID, ")")
+        return true
+      end
+    end
+  end
+
   TM.DebugPrint("TryUseHearth: aucune pierre trouvée")
   return false
 end
@@ -1207,14 +1266,21 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
       -- Proposition LFG — activer le flag pending ET essai immédiat
       TM.pendingInstanceAccept = true
       C_Timer.After(15, function() TM.pendingInstanceAccept = false end)
+      local accepted = false
       for _, fname in ipairs({"LFGDungeonReadyPopup", "LFGDungeonReadyDialog", "LFGProposalFrame"}) do
         local fr = _G[fname]
         if fr and fr:IsShown() then
           TM.AcceptInstanceProposal()
           TM.pendingInstanceAccept = false
           TM.DebugPrint("Auto-accept LFG via", fname)
+          accepted = true
           break
         end
+      end
+      -- Polling fallback : si le popup n'est pas encore visible (message arrivé trop tôt)
+      if not accepted then
+        TM.DebugPrint("INSTENTER|lfg: popup pas encore visible, démarrage polling accept (30s)")
+        TM.StartInstanceAcceptPoll(60)
       end
 
     elseif kind == "portal" and TM.db and TM.db.autoEnterInstance ~= false then
@@ -1265,12 +1331,17 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
   end
 
   -- Delve exit: DELVEEXIT|1
-  -- Côté membre : LFGTeleport(true) via SecureHandler pour quitter l'instance directement.
-  -- Pas besoin de StaticPopup ni de polling : le membre n'a pas à confirmer manuellement.
+  -- Côté membre : 1) tente immédiatement (vote actif ou popup déjà visible),
+  -- 2) si rien de visible, démarre un polling 30s qui réessaie toutes les 0.5s
+  --    jusqu'à ce que INSTANCE_ABANDON_VOTE_STARTED arrive sur le membre.
   if mtype == "DELVEEXIT" then
     if TM.db and TM.db.autoEnterInstance ~= false then
-      TM.DebugPrint("DELVEEXIT reçu: sortie Gouffre via SecureHandler")
+      TM.DebugPrint("DELVEEXIT reçu: tentative immédiate + polling fallback")
       if TM.ConfirmDelveExit then TM.ConfirmDelveExit() end
+      -- Polling pour le cas où le popup arrive après le broadcast
+      TM.pendingDelveExit = true
+      C_Timer.After(30, function() TM.pendingDelveExit = false end)
+      if TM.StartDelveExitPoll then TM.StartDelveExitPoll(60) end
     end
     return
   end

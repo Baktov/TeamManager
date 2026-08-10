@@ -588,8 +588,11 @@ end
 
 -- Entrée d'instance automatique : broadcaster quand le leader valide
 -- Cas 1 : proposition LFG (popup donjon prêt) — AcceptProposal → géré par autoEnterDungeon
--- Guarded: AcceptProposal may not exist in all TWW builds; a nil hook would Lua-error
--- and prevent all subsequent code (including delveDetectFrame) from loading.
+-- NOTE TWW 11.x : le bouton "Accepter" de LFGDungeonReadyDialog appelle AcceptProposal()
+-- depuis le XML restreint (secure). hooksecurefunc() ne se déclenche PAS depuis ce
+-- contexte restreint → on garde le hook comme fallback (fonctionne si AcceptProposal est
+-- appelé depuis Lua normal, ex. addon) mais la détection principale passe par
+-- LFG_PROPOSAL_UPDATE (voir bloc ci-dessous).
 if AcceptProposal then
   hooksecurefunc("AcceptProposal", function()
     TM.DebugPrint("AcceptProposal déclenché (leader=", tostring(_isLeader()), ")")
@@ -601,7 +604,45 @@ else
   TM.DebugPrint("AcceptProposal absent de l'API TWW — hook LFG désactivé")
 end
 
+-- Cas 1 (fiable TWW 11.x) : LFG_PROPOSAL_UPDATE — détecte hasResponded false→true côté leader.
+-- hooksecurefunc("AcceptProposal") ne fire pas depuis le XML restreint du bouton Accepter ;
+-- LFG_PROPOSAL_UPDATE est émis par le serveur dès que le joueur répond, sans dépendance à l'UI.
+do
+  local _proposalRespondedBroadcast = false -- reset à chaque nouvelle proposition
+  local _lastInstenterBroadcast = 0         -- anti-spam 5s
+  local _lfgProposalFrame = CreateFrame("Frame")
+  _lfgProposalFrame:RegisterEvent("LFG_PROPOSAL_SHOW")
+  _lfgProposalFrame:RegisterEvent("LFG_PROPOSAL_UPDATE")
+  _lfgProposalFrame:RegisterEvent("LFG_PROPOSAL_FAILED")
+  _lfgProposalFrame:SetScript("OnEvent", function(self, event)
+    if event == "LFG_PROPOSAL_SHOW" or event == "LFG_PROPOSAL_FAILED" then
+      _proposalRespondedBroadcast = false
+      TM.DebugPrint("[LFGProposal] reset responded flag (event=", event, ")")
+      return
+    end
+    -- LFG_PROPOSAL_UPDATE
+    if not (TM.db and TM.db.autoEnterDungeon ~= false) then return end
+    if not _isLeader() then return end
+    if _proposalRespondedBroadcast then return end
+    local proposalExists, _, _, _, _, _, _, hasResponded = GetLFGProposal()
+    if proposalExists and hasResponded then
+      local now = GetTime()
+      if (now - _lastInstenterBroadcast) < 5 then
+        TM.DebugPrint("[LFGProposal] anti-spam skip")
+        return
+      end
+      _proposalRespondedBroadcast = true
+      _lastInstenterBroadcast = now
+      TM.DebugPrint("[LFGProposal] leader hasResponded=true -> BroadcastInstanceEnter(lfg)")
+      if TM.BroadcastInstanceEnter then TM.BroadcastInstanceEnter("lfg") end
+    end
+  end)
+end
+
 -- Cas 1b : confirmation de rôle LFG (popup « Confirmez votre rôle ») — AcceptRoleCheck → autoEnterDungeon
+-- Même problème TWW : AcceptRoleCheck peut être appelé depuis XML restreint.
+-- Le listener LFG_ROLE_CHECK_SHOW côté membre (Events.lua) + pendingRoleCheck (Sync.lua)
+-- gèrent le cas où le membre voit la popup avant le broadcast.
 if AcceptRoleCheck then
   hooksecurefunc("AcceptRoleCheck", function()
     TM.DebugPrint("AcceptRoleCheck déclenché (leader=", tostring(_isLeader()), ")")
@@ -676,6 +717,33 @@ if StaticPopup_OnClick then
   end)
 else
   TM.DebugPrint("StaticPopup_OnClick absent — hook désactivé")
+end
+
+-- ─── Sortie de Gouffre TWW : vote d'abandon d'instance (fiable) ────────────
+-- Le popup « Souhaitez-vous partir ? » est en réalité VOTE_ABANDON_INSTANCE_VOTE,
+-- qui utilise InstanceAbandonPopup (cadre réservé), PAS StaticPopup1..4. Le hook
+-- StaticPopup_OnClick ci-dessus ne le détecte pas correctement car le `which`
+-- ne contient pas "INSTANCE" mais "VOTE_ABANDON_INSTANCE_VOTE".
+--
+-- Détection canonique (mirroir de LFG_PROPOSAL_UPDATE pour l'entrée) :
+-- on hooke C_PartyInfo.SetInstanceAbandonVoteResponse — non protégée — appelée
+-- par InstanceAbandonMixin:SetResponse() lors du clic Oui/Non.
+if C_PartyInfo and C_PartyInfo.SetInstanceAbandonVoteResponse then
+  local _lastBroadcastAbandon = 0
+  hooksecurefunc(C_PartyInfo, "SetInstanceAbandonVoteResponse", function(response)
+    TM.DebugPrint("[AbandonVote] SetInstanceAbandonVoteResponse=", tostring(response),
+      "isLeader=", tostring(_isLeader()))
+    if response ~= true then return end -- on ne broadcast que le vote OUI
+    if not (TM.db and TM.db.autoEnterInstance ~= false) then return end
+    if not _isLeader() then return end
+    local now = GetTime()
+    if (now - _lastBroadcastAbandon) < 5 then return end
+    _lastBroadcastAbandon = now
+    TM.DebugPrint("[AbandonVote] leader vote OUI -> broadcast DELVEEXIT")
+    if TM.BroadcastDelveExit then TM.BroadcastDelveExit() end
+  end)
+else
+  TM.DebugPrint("C_PartyInfo.SetInstanceAbandonVoteResponse absent — hook AbandonVote désactivé")
 end
 
 -- Détection d'entrée dans un Gouffre (Delve TWW) :
@@ -795,27 +863,104 @@ end)
 
 
 -- ─── Hearthstone sync : leader utilise une pierre de foyer -> broadcast ───
+-- Détection par SpellID résolu depuis une liste connue d'items "hearthstone"
+-- (synchronisée avec TeleportMenu/Data/Hearthstones.lua + Hearthstone classique).
+-- Les noms localisés ne sont PAS fiables : "Tome de portail de village",
+-- "La Fille de l'aubergiste", "Voie des naaru", "Portail éthéré" ne contiennent
+-- ni "foyer" ni "hearth". On résout itemID -> spellID via C_Item.GetItemSpell
+-- au runtime et on remplit un Set utilisé pour matcher UNIT_SPELLCAST_START.
+-- Fallback : keywords FR/EN si le mapping itemID->spellID n'est pas encore prêt.
 local _lastHearthBroadcast = 0
-local hearthKeywords = { "Hearthstone", "Pierre de foyer", "Pierre de foyer :", "Hearth" }
+local hearthKeywords = {
+  "Hearthstone", "Hearth",
+  "Pierre de foyer", "foyer",
+  "portail de village",
+}
+
+-- Item IDs des hearthstones connus (Hearthstone standard + tous les toys de TeleportMenu)
+local _hearthItemIDs = {
+  6948,    -- Hearthstone (item)
+  54452, 64488, 93672, 142542, 162973, 163045, 163206, 165669, 165670,
+  165802, 166746, 166747, 168907, 172179, 180290, 182773, 183716, 184353,
+  188952, 190196, 190237, 193588, 200630, 206195, 208704, 209035, 210455,
+  212337, 228940, 236687, 235016, 245970, 246565, 263489,
+  110560, 140192, -- Garrison + Dalaran (déjà dans la liste principale TeleportMenu)
+}
+-- Set spellID -> true (rempli à la volée via C_Item.GetItemSpell)
+local _hearthSpellIDs = {}
+local _hearthSpellsResolved = false
+
+-- Résout les spell IDs depuis les item IDs (lazy : tente jusqu'à ce que tous les
+-- items soient cache-chargés). C_Item.GetItemSpell renvoie nil si l'item n'est
+-- pas encore en cache → on retente lors du prochain appel.
+local function _resolveHearthSpells()
+  if _hearthSpellsResolved then return end
+  local allResolved = true
+  for _, itemID in ipairs(_hearthItemIDs) do
+    local spellID
+    if C_Item and C_Item.GetItemSpell then
+      local _, sid = C_Item.GetItemSpell(itemID)
+      spellID = sid
+    elseif GetItemSpell then
+      local _, sid = GetItemSpell(itemID)
+      spellID = sid
+    end
+    if spellID then
+      _hearthSpellIDs[spellID] = true
+    else
+      allResolved = false
+      -- Force le cache à charger
+      if C_Item and C_Item.RequestLoadItemDataByID then
+        C_Item.RequestLoadItemDataByID(itemID)
+      end
+    end
+  end
+  _hearthSpellsResolved = allResolved
+end
+-- Pré-résolution dès maintenant + retry après délai pour items pas en cache
+_resolveHearthSpells()
+C_Timer.After(2,  _resolveHearthSpells)
+C_Timer.After(10, _resolveHearthSpells)
+
+local function _isHearthSpell(spellID, sname)
+  -- 1) Match par spellID (le plus fiable)
+  if spellID and _hearthSpellIDs[spellID] then return true end
+  -- 2) Tentative de résolution paresseuse (au cas où l'item vient d'être mis en cache)
+  if spellID and not _hearthSpellsResolved then
+    _resolveHearthSpells()
+    if _hearthSpellIDs[spellID] then return true end
+  end
+  -- 3) Fallback par nom (couvre les hearthstones non listés / nouveaux)
+  if sname then
+    local low = sname:lower()
+    for _, kw in ipairs(hearthKeywords) do
+      if low:find(kw:lower(), 1, true) then return true end
+    end
+  end
+  return false
+end
+
 local hearthCastFrame = CreateFrame("Frame")
+hearthCastFrame:RegisterUnitEvent("UNIT_SPELLCAST_START", "player")
 hearthCastFrame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
 hearthCastFrame:SetScript("OnEvent", function(self, event, unit, _, spellID)
   if not spellID then return end
   if not (TM.db and TM.db.autoHearth ~= false) then return end
   if not _isLeader() then return end
-  local sname = GetSpellInfo(spellID)
-  if not sname then return end
-  for _, kw in ipairs(hearthKeywords) do
-    if sname:find(kw) then
-      local now = GetTime()
-      if (now - _lastHearthBroadcast) < 5 then
-        TM.DebugPrint("[HearthHook] anti-spam, skip (spell=", sname, ")")
-        return
-      end
-      _lastHearthBroadcast = now
-      if TM.BroadcastHearth then TM.BroadcastHearth() end
-      TM.DebugPrint("[HearthHook] leader cast hearth spell=", sname)
-      return
-    end
+  -- Compatibilité TWW : GetSpellInfo peut renvoyer nil ; fallback sur C_Spell.GetSpellName
+  local sname = GetSpellInfo and GetSpellInfo(spellID) or nil
+  if not sname and C_Spell and C_Spell.GetSpellName then
+    sname = C_Spell.GetSpellName(spellID)
   end
+  if not _isHearthSpell(spellID, sname) then return end
+  local now = GetTime()
+  if (now - _lastHearthBroadcast) < 5 then
+    TM.DebugPrint("[HearthHook] anti-spam, skip (event=", event, "spell=", tostring(sname),
+      "id=", tostring(spellID), ")")
+    return
+  end
+  _lastHearthBroadcast = now
+  if TM.BroadcastHearth then TM.BroadcastHearth() end
+  TM.DebugPrint("[HearthHook] leader hearth detected event=", event,
+    "spell=", tostring(sname), "id=", tostring(spellID))
 end)

@@ -1,0 +1,14 @@
+json
+{
+  "servers": {
+    "wow-api": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "wow-api-mcp"
+      ]
+    }
+  }
+}
