@@ -583,6 +583,37 @@ function TM.CompactMembersArray(arr)
   return out
 end
 
+local _guildOnlineCache = {}
+local _guildCacheAt = 0
+local _guildCacheTTL = 5
+
+local function _refreshGuildOnlineCache()
+  if not (IsInGuild and IsInGuild() and GetNumGuildMembers and GetGuildRosterInfo) then
+    _guildOnlineCache = {}
+    _guildCacheAt = 0
+    return
+  end
+  local now = (GetTime and GetTime()) or 0
+  if (now - _guildCacheAt) < _guildCacheTTL and next(_guildOnlineCache) then
+    return
+  end
+  -- Throttle GuildRoster requests to avoid UI hitches when many rows refresh.
+  if GuildRoster and type(GuildRoster) == "function" and (now - _guildCacheAt) >= _guildCacheTTL then
+    GuildRoster()
+  end
+  local ng = GetNumGuildMembers() or 0
+  local fresh = {}
+  for i = 1, ng do
+    local gname, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+    if gname and online then
+      local gshort = gname:match("^(.-)%-") or gname
+      fresh[gshort] = true
+    end
+  end
+  _guildOnlineCache = fresh
+  _guildCacheAt = now
+end
+
 function TM.IsMemberOnline(name)
   if not name or name == "" then return false end
   local short = name:match("^(.-)%-") or name
@@ -605,15 +636,8 @@ function TM.IsMemberOnline(name)
     end
   end
   if IsInGuild and IsInGuild() and GetNumGuildMembers and GetGuildRosterInfo then
-    if GuildRoster and type(GuildRoster) == "function" then GuildRoster() end
-    local ng = GetNumGuildMembers() or 0
-    for i = 1, ng do
-      local gname, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
-      if gname then
-        local gshort = gname:match("^(.-)%-") or gname
-        if gshort == short and online then return true end
-      end
-    end
+    _refreshGuildOnlineCache()
+    if _guildOnlineCache[short] then return true end
   end
   return false
 end

@@ -798,6 +798,52 @@ questDetailAutoFrame:SetScript("OnEvent", function(self, event, arg1)
 end)
 
 -- Addon message receiver
+local _restrictedSyncTypes = {
+  QACCEPT = true,
+  QVALIDATE = true,
+  QREWARD = true,
+  GOSSIP = true,
+  GOSSIPQAVAIL = true,
+  GOSSIPQACTIVE = true,
+  CLOSEUI = true,
+  CINESKIP = true,
+  TAXI = true,
+  ROLECHECK = true,
+  INSTENTER = true,
+  DELVEENTER = true,
+  DELVEEXIT = true,
+  MOUNT = true,
+  HEARTH = true,
+  TEAM = true,
+}
+
+local _authRejectLogCache = {}
+local _authRejectLogCooldown = 10
+
+local function _notifyAuthReject(mtype, senderShort, leaderShort)
+  local now = GetTime and GetTime() or 0
+  local key = tostring(mtype) .. "|" .. tostring(senderShort) .. "|" .. tostring(leaderShort)
+  local last = _authRejectLogCache[key] or 0
+  if (now - last) < _authRejectLogCooldown then return end
+  _authRejectLogCache[key] = now
+  if TM and TM.Print then
+    TM.Print("Sync rejeté (autorité):", mtype,
+      "| sender=", tostring(senderShort),
+      "| leader attendu=", tostring(leaderShort or "(aucun)"))
+  end
+end
+
+local function _getActiveTeamLeaderShort()
+  local activeTeam = TM.selectedTeam
+  if not activeTeam and TM.LoadSelectedTeamForCharacter then
+    activeTeam = TM.LoadSelectedTeamForCharacter()
+  end
+  if not activeTeam or not TM.db or not TM.db.teams then return nil end
+  local t = TM.db.teams[activeTeam]
+  if not t or not t.leader or t.leader == "" then return nil end
+  return t.leader:match("^(.-)%-") or t.leader
+end
+
 local syncFrame = CreateFrame("Frame")
 syncFrame:RegisterEvent("CHAT_MSG_ADDON")
 syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sender)
@@ -808,6 +854,17 @@ syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
   TM.DebugPrint("Sync reçu de", sender, "->", msg)
   local mtype = msg:match("^(%a+)|")
   if not mtype then return end
+
+  -- Autorité stricte : seuls les messages critiques émis par le leader actif sont acceptés.
+  if _restrictedSyncTypes[mtype] then
+    local leaderShort = _getActiveTeamLeaderShort()
+    if not leaderShort or senderShort ~= leaderShort then
+      TM.DebugPrint("Sync ignoré (autorité):", mtype, "sender=", senderShort,
+        "leader attendu=", tostring(leaderShort))
+      _notifyAuthReject(mtype, senderShort, leaderShort)
+      return
+    end
+  end
 
   -- State sync: STATE|follow|targetName  or  STATE|assist|targetName
   if mtype == "STATE" then

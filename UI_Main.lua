@@ -9,9 +9,10 @@ function TM.SelectTeam(name, save)
   if not name then return end
   local t = TM.db.teams[name]
   if not t then return end
+  local members = t.members or {}
 
-  TM.DebugPrint("SelectTeam debug - raw members count (#):", #t.members or 0)
-  for k, v in pairs(t.members) do TM.DebugPrint(" member key:", k, "value:", v) end
+  TM.DebugPrint("SelectTeam debug - raw members count (#):", #members)
+  for k, v in pairs(members) do TM.DebugPrint(" member key:", k, "value:", v) end
 
   local ui = TM.ui
   ui.teamName:SetText(name)
@@ -32,7 +33,7 @@ function TM.SelectTeam(name, save)
   -- populate member rows
   ui.selectedMember = nil
   if ui.memberRows then
-    local membersList = TM.CompactMembersArray(t.members)
+    local membersList = TM.CompactMembersArray(members)
     TM.DebugPrint("SelectTeam debug - compacted members count:", #membersList)
     for i, v in ipairs(membersList) do TM.DebugPrint(" compact["..i.."]=", v) end
 
@@ -826,9 +827,7 @@ function TM.BuildUI()
         TM.SelectTeam(saved, false)
         TM.Print("UI: Team restaurée pour ce personnage:", saved)
       else
-        if TM.db and TM.db.teams then
-          for nm, _ in pairs(TM.db.teams) do TM.SelectTeam(nm, false); break end
-        end
+        TM.DebugPrint("UI OnShow: aucune team per-character à restaurer")
       end
     end
   end)
