@@ -904,6 +904,7 @@ function TM.ShowInviteConfirmDialog(data)
     d.infoLine:SetText(string.format(
       "Équipe : |cffffcc00%s|r     Leader : |cffffcc00%s|r", data.teamName, data.leaderFull))
     d.prefixEdit:SetText(data.sentPrefix)
+    if TM.ApplyElvUISkinInviteDialog then TM.ApplyElvUISkinInviteDialog(d) end
     d:Show()
     d.prefixEdit:SetFocus()
     return
@@ -1021,8 +1022,10 @@ function TM.ShowInviteConfirmDialog(data)
   cancelBtn:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -24, 18)
   cancelBtn:SetText("Annuler")
   cancelBtn:SetScript("OnClick", function() dialog:Hide() end)
+  dialog.cancelBtn = cancelBtn
 
   ui.inviteConfirmDialog = dialog
+  if TM.ApplyElvUISkinInviteDialog then TM.ApplyElvUISkinInviteDialog(dialog) end
   dialog:Show()
   editBox:SetFocus()
 end
